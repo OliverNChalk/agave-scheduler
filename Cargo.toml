@@ -36,6 +36,7 @@ agave-scheduler-bindings.git = "https://github.com/anza-xyz/agave"
 agave-scheduling-utils.git = "https://github.com/anza-xyz/agave"
 clap = "4.5.51"
 futures = { version = "0.3.31", default-features = false }
+greedy.path = "./crates/greedy"
 rts-alloc = "1.0.0"
 shaq = "1.0.0"
 tokio = "1.48.0"

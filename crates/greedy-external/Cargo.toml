@@ -13,6 +13,7 @@ agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-uti
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }
+greedy.workspace = true
 rts-alloc.workspace = true
 shaq.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }
