@@ -1,0 +1,34 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Oliver Chalk"]
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.clippy]
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+# See `clippy.toml`.
+disallowed_methods = "warn"
+get_first = "allow"
+inline-always = "allow"
+match_bool = "allow"
+missing_const_for_fn = "warn"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+needless-raw-string-hashes = "allow"
+pedantic = { level = "warn", priority = -1 }
+similar_names = "allow"
+single_match_else = "allow"
+struct_excessive_bools = "allow"
+todo = "warn"
+too_many_lines = "allow"
+trivially_copy_pass_by_ref = "warn"
+
+[workspace.dependencies]
