@@ -64,36 +64,36 @@ mod tests {
     use std::ptr::NonNull;
 
     use agave_scheduler_bindings::{
-        SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage,
-        pack_message_flags, processed_codes,
+        SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage, processed_codes,
     };
-    use agave_scheduling_utils::handshake::server::{AgaveSession, AgaveTpuToPackSession};
+    use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
+    use solana_hash::Hash;
+    use solana_keypair::{Keypair, Pubkey};
     use solana_transaction::Transaction;
 
     use super::*;
 
     #[test]
     fn check_on_ingest() {
-        let (mut session, mut scheduler) = setup();
+        let mut harness = Harness::setup();
 
         // Ingest a simple transfer.
-        session
-            .tpu_to_pack
-            .producer
-            .try_write(TpuToPackMessage {
-                transaction: simple_transfer(&session.tpu_to_pack.allocator),
-                flags: 0,
-                src_addr: [0; 16],
-            })
-            .unwrap();
-        session.tpu_to_pack.producer.commit();
+        let from = Keypair::new();
+        let to = Pubkey::new_unique();
+        harness.ingest_transaction(&solana_system_transaction::transfer(
+            &from,
+            &to,
+            1,
+            Hash::new_unique(),
+        ));
 
         // Poll the greedy scheduler.
-        scheduler.poll();
+        harness.poll_scheduler();
 
         // Assert - One worker is requested to check the transaction.
-        let mut worker_requests: Vec<_> = session
+        let mut worker_requests: Vec<_> = harness
+            .session
             .workers
             .iter_mut()
             .enumerate()
@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(message.flags & 1, 0);
 
         // Queue the mock worker response.
-        session.workers[worker_index]
+        harness.session.workers[worker_index]
             .worker_to_pack
             .try_write(WorkerToPackMessage {
                 batch: message.batch,
@@ -118,7 +118,7 @@ mod tests {
             .unwrap();
 
         // Assert - Scheduler does not schedule the valid TX.
-        assert!(session.workers.iter_mut().all(|worker| {
+        assert!(harness.session.workers.iter_mut().all(|worker| {
             worker.pack_to_worker.sync();
 
             worker.pack_to_worker.is_empty()
@@ -164,7 +164,11 @@ mod tests {
             Self { session: agave_session, scheduler: GreedyScheduler::new(client_session) }
         }
 
-        fn send_tpu_transaction(&mut self, tx: &Transaction) {
+        fn poll_scheduler(&mut self) {
+            self.scheduler.poll();
+        }
+
+        fn ingest_transaction(&mut self, tx: &Transaction) {
             // Serialize & copy the pointer to shared memory.
             let mut packet = bincode::serialize(&tx).unwrap();
             let packet_len = packet.len().try_into().unwrap();
