@@ -13,3 +13,7 @@ agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-uti
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 rts-alloc.workspace = true
 shaq.workspace = true
+
+[dev-dependencies]
+bincode = "1.3.3"
+solana-transaction = { workspace = true, features = ["serde"] }

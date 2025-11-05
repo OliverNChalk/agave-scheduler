@@ -512,8 +512,10 @@ version = "0.1.0"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
+ "bincode",
  "rts-alloc",
  "shaq",
+ "solana-transaction",
 ]
 
 [[package]]
@@ -656,7 +658,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -821,6 +823,15 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-big-array"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1106,11 +1117,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85666605c9fd727f865ed381665db0a8fc29f984a030ecc1e40f43bfb2541623"
 dependencies = [
  "lazy_static",
+ "serde",
+ "serde_derive",
  "solana-address",
  "solana-hash 3.1.0",
  "solana-instruction",
  "solana-sanitize",
  "solana-sdk-ids",
+ "solana-short-vec",
  "solana-transaction-error",
 ]
 
@@ -1261,6 +1275,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bb8057cc0e9f7b5e89883d49de6f407df655bb6f3a71d0b7baf9986a2218fd9"
 dependencies = [
  "five8 0.2.1",
+ "serde",
+ "serde-big-array",
+ "serde_derive",
  "solana-sanitize",
 ]
 
@@ -1350,6 +1367,8 @@ version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64928e6af3058dcddd6da6680cbe08324b4e071ad73115738235bbaa9e9f72a5"
 dependencies = [
+ "serde",
+ "serde_derive",
  "solana-address",
  "solana-hash 3.1.0",
  "solana-instruction",
@@ -1357,6 +1376,7 @@ dependencies = [
  "solana-message",
  "solana-sanitize",
  "solana-sdk-ids",
+ "solana-short-vec",
  "solana-signature",
  "solana-transaction-error",
 ]

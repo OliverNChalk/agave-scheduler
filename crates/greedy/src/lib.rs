@@ -61,6 +61,7 @@ impl GreedyScheduler {
 #[cfg(test)]
 mod tests {
     use std::os::fd::IntoRawFd;
+    use std::ptr::NonNull;
 
     use agave_scheduler_bindings::{
         SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage,
@@ -68,6 +69,7 @@ mod tests {
     };
     use agave_scheduling_utils::handshake::server::{AgaveSession, AgaveTpuToPackSession};
     use agave_scheduling_utils::handshake::{self, ClientLogon};
+    use solana_transaction::Transaction;
 
     use super::*;
 
@@ -75,7 +77,7 @@ mod tests {
     fn check_on_ingest() {
         let (mut session, mut scheduler) = setup();
 
-        // Write a simple transfer.
+        // Ingest a simple transfer.
         session
             .tpu_to_pack
             .producer
@@ -152,14 +154,40 @@ mod tests {
                 worker_to_pack_capacity: 16,
                 flags: 0,
             };
-            let (server_session, files) = handshake::server::Server::setup_session(logon).unwrap();
+            let (agave_session, files) = handshake::server::Server::setup_session(logon).unwrap();
             let client_session = handshake::client::setup_session(
                 &logon,
-                files.into_iter().map(|file| file.into_raw_fd()).collect(),
+                files.into_iter().map(IntoRawFd::into_raw_fd).collect(),
             )
             .unwrap();
 
-            Self { session: (), scheduler: () }
+            Self { session: agave_session, scheduler: GreedyScheduler::new(client_session) }
+        }
+
+        fn send_tpu_transaction(&mut self, tx: &Transaction) {
+            // Serialize & copy the pointer to shared memory.
+            let mut packet = bincode::serialize(&tx).unwrap();
+            let packet_len = packet.len().try_into().unwrap();
+            let pointer = self.allocator().allocate(packet_len).unwrap();
+            unsafe {
+                pointer.copy_from_nonoverlapping(
+                    NonNull::new(packet.as_mut_ptr()).unwrap(),
+                    packet.len(),
+                );
+            }
+            let offset = unsafe { self.allocator().offset(pointer) };
+            let tx = SharableTransactionRegion { offset, length: packet_len };
+
+            self.session
+                .tpu_to_pack
+                .producer
+                .try_write(TpuToPackMessage { transaction: tx, flags: 0, src_addr: [0; 16] })
+                .unwrap();
+            self.session.tpu_to_pack.producer.commit();
+        }
+
+        fn allocator(&self) -> &Allocator {
+            &self.session.tpu_to_pack.allocator
         }
     }
 }

@@ -41,6 +41,7 @@ futures = { version = "0.3.31", default-features = false }
 greedy.path = "./crates/greedy"
 rts-alloc = "1.0.0"
 shaq = "1.0.0"
+solana-transaction = "3.0.1"
 tokio = "1.48.0"
 toolbox.git = "https://github.com/OliverNChalk/toolbox-rs"
 tracing = "0.1.41"
