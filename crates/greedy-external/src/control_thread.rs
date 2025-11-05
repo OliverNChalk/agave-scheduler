@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use tokio::runtime::Runtime;
@@ -6,7 +8,7 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
-use crate::worker_thread::WorkerThread;
+use crate::scheduler_thread::SchedulerThread;
 
 pub(crate) struct ControlThread {
     shutdown: Shutdown,
@@ -14,21 +16,21 @@ pub(crate) struct ControlThread {
 }
 
 impl ControlThread {
-    pub(crate) fn run_in_place() -> std::thread::Result<()> {
+    pub(crate) fn run_in_place(bindings_ipc: PathBuf) -> std::thread::Result<()> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let server = ControlThread::setup(&runtime);
+        let server = ControlThread::setup(&runtime, bindings_ipc);
 
         runtime.block_on(server.run())
     }
 
-    fn setup(runtime: &Runtime) -> Self {
+    fn setup(runtime: &Runtime, bindings_ipc: PathBuf) -> Self {
         let shutdown = Shutdown::new();
 
         // Setup app threads.
-        let threads = vec![WorkerThread::spawn(shutdown.clone())];
+        let threads = vec![SchedulerThread::spawn(shutdown.clone(), bindings_ipc)];
 
         // Use tokio to listen on all thread exits concurrently.
         let threads = threads
