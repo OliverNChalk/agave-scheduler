@@ -63,5 +63,6 @@ impl SchedulerThread {
         while let Some(msg) = self.session.progress_tracker.try_read() {
             self.progress = *msg;
         }
+        self.session.progress_tracker.finalize();
     }
 }
