@@ -32,3 +32,8 @@ too_many_lines = "allow"
 trivially_copy_pass_by_ref = "warn"
 
 [workspace.dependencies]
+clap = "4.5.51"
+futures = { version = "0.3.31", default-features = false }
+tokio = "1.48.0"
+toolbox.git = "https://github.com/OliverNChalk/toolbox-rs"
+tracing = "0.1.41"

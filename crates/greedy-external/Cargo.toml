@@ -1,0 +1,16 @@
+[package]
+name = "greedy-external"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true, features = ["alloc"] }
+tokio = { workspace = true, features = ["macros", "rt", "signal"] }
+toolbox = { workspace = true, features = ["named_task", "shutdown", "tracing", "version"] }
+tracing.workspace = true
