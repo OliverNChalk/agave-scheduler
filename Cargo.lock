@@ -5,12 +5,10 @@ version = 4
 [[package]]
 name = "agave-scheduler-bindings"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/anza-xyz/agave#6f19690b9e55b442f6db9881d84142d0a0238256"
 
 [[package]]
 name = "agave-scheduling-utils"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/anza-xyz/agave#6f19690b9e55b442f6db9881d84142d0a0238256"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-transaction-view",
@@ -27,7 +25,6 @@ dependencies = [
 [[package]]
 name = "agave-transaction-view"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/anza-xyz/agave#6f19690b9e55b442f6db9881d84142d0a0238256"
 dependencies = [
  "solana-hash 3.1.0",
  "solana-message",
@@ -1296,7 +1293,6 @@ dependencies = [
 [[package]]
 name = "solana-svm-transaction"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/anza-xyz/agave#6f19690b9e55b442f6db9881d84142d0a0238256"
 dependencies = [
  "solana-hash 3.1.0",
  "solana-message",
@@ -1368,7 +1364,6 @@ dependencies = [
 [[package]]
 name = "solana-transaction-context"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/anza-xyz/agave#6f19690b9e55b442f6db9881d84142d0a0238256"
 dependencies = [
  "bincode",
  "serde",

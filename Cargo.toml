@@ -32,8 +32,10 @@ too_many_lines = "allow"
 trivially_copy_pass_by_ref = "warn"
 
 [workspace.dependencies]
-agave-scheduler-bindings.git = "https://github.com/anza-xyz/agave"
-agave-scheduling-utils.git = "https://github.com/anza-xyz/agave"
+# agave-scheduler-bindings.git = "https://github.com/anza-xyz/agave"
+# agave-scheduling-utils.git = "https://github.com/anza-xyz/agave"
+agave-scheduler-bindings.path = "../agave/scheduler-bindings"
+agave-scheduling-utils.path = "../agave/scheduling-utils"
 clap = "4.5.51"
 futures = { version = "0.3.31", default-features = false }
 greedy.path = "./crates/greedy"
