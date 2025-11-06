@@ -60,11 +60,8 @@ impl GreedyScheduler {
             false => self.drain_tpu(1024),
         }
 
-        // Schedule a bounded number of check jobs.
-        match is_leader {
-            true => self.schedule_checks(64),
-            false => self.schedule_checks(1024),
-        }
+        // Drain pending checks.
+        self.schedule_checks();
 
         // Schedule if we're currently the leader.
         if is_leader {
@@ -95,57 +92,42 @@ impl GreedyScheduler {
             let Some(msg) = self.tpu_to_pack.try_read() else {
                 return;
             };
-            println!("{msg:?}");
 
             self.queue_unchecked.push_back(msg.transaction);
         }
     }
 
-    fn schedule_checks(&mut self, max: usize) {
-        todo!()
+    fn schedule_checks(&mut self) {
+        // TODO: Need to figure out how back pressure works when the check worker is not
+        // keeping up.
+        while !self.queue_checked.is_empty() {
+            self.schedule_check_batch();
+        }
+    }
+
+    fn schedule_check_batch(&mut self) {
+        let worker = &mut self.workers[0];
+        worker.pack_to_worker.sync();
+        worker
+            .pack_to_worker
+            .try_write(PackToWorkerMessage {
+                flags: pack_message_flags::CHECK,
+                max_working_slot: self.progress.current_slot + 1,
+                batch: Self::collect_batch(&self.allocator, || self.queue_unchecked.pop_front()),
+            })
+            .unwrap();
+        worker.pack_to_worker.commit();
     }
 
     fn schedule_execute(&mut self) {
-        for worker in &mut self.workers {
+        for worker in &mut self.workers[1..] {
             worker.pack_to_worker.sync();
 
             if self.queue_checked.is_empty() {
                 continue;
             }
 
-            // Allocate a batch that can hold all our transaction pointers.
-            let transactions = self
-                .allocator
-                .allocate(
-                    (core::mem::size_of::<SharableTransactionRegion>()
-                        * MAX_TRANSACTIONS_PER_MESSAGE) as u32,
-                )
-                .unwrap();
-            let transactions_offset = unsafe { self.allocator.offset(transactions) };
-
-            // Fill in the batch with transaction pointers.
-            let mut num_transactions = 0;
-            while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
-                let Some(tx) = self.queue_checked.pop_front() else {
-                    break;
-                };
-
-                // SAFETY:
-                // - We have allocated the transaction batch to support at least
-                //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
-                //   region.
-                unsafe {
-                    self.allocator
-                        .ptr_from_offset(transactions_offset)
-                        .cast::<SharableTransactionRegion>()
-                        .add(num_transactions)
-                        .write(tx);
-                };
-
-                num_transactions += 1;
-            }
-
-            println!("created batch with {num_transactions} txs");
+            let batch = Self::collect_batch(&self.allocator, || self.queue_checked.pop_front());
 
             worker.pack_to_worker.sync();
             worker
@@ -153,13 +135,51 @@ impl GreedyScheduler {
                 .try_write(PackToWorkerMessage {
                     flags: pack_message_flags::EXECUTE,
                     max_working_slot: self.progress.current_slot + 1,
-                    batch: SharableTransactionBatchRegion {
-                        num_transactions: num_transactions.try_into().unwrap(),
-                        transactions_offset,
-                    },
+                    batch,
                 })
                 .unwrap();
             worker.pack_to_worker.commit();
+        }
+    }
+
+    fn collect_batch(
+        allocator: &Allocator,
+        mut pop: impl FnMut() -> Option<SharableTransactionRegion>,
+    ) -> SharableTransactionBatchRegion {
+        // Allocate a batch that can hold all our transaction pointers.
+        let transactions = allocator
+            .allocate(
+                (core::mem::size_of::<SharableTransactionRegion>() * MAX_TRANSACTIONS_PER_MESSAGE)
+                    as u32,
+            )
+            .unwrap();
+        let transactions_offset = unsafe { allocator.offset(transactions) };
+
+        // Fill in the batch with transaction pointers.
+        let mut num_transactions = 0;
+        while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
+            let Some(tx) = pop() else {
+                break;
+            };
+
+            // SAFETY:
+            // - We have allocated the transaction batch to support at least
+            //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
+            //   region.
+            unsafe {
+                allocator
+                    .ptr_from_offset(transactions_offset)
+                    .cast::<SharableTransactionRegion>()
+                    .add(num_transactions)
+                    .write(tx);
+            };
+
+            num_transactions += 1;
+        }
+
+        SharableTransactionBatchRegion {
+            num_transactions: num_transactions.try_into().unwrap(),
+            transactions_offset,
         }
     }
 }

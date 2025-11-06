@@ -604,6 +604,7 @@ version = "0.1.0"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
+ "agave-transaction-view",
  "bincode",
  "rts-alloc",
  "shaq",
