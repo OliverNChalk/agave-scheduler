@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
-use std::ptr::NonNull;
 
+use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
-    self, CheckResponse, fee_payer_balance_flags, parsing_and_sanitization_flags, resolve_flags,
+    self, fee_payer_balance_flags, parsing_and_sanitization_flags, resolve_flags,
     status_check_flags,
 };
 use agave_scheduler_bindings::{
@@ -106,16 +106,31 @@ impl GreedyScheduler {
                     }
                     processed_codes::PROCESSED => {}
                     _ => panic!(),
-                };
+                }
 
                 match msg.responses.tag {
                     worker_message_types::CHECK_RESPONSE => {
-                        let ptr = self
-                            .allocator
-                            .ptr_from_offset(msg.responses.transaction_responses_offset)
-                            .cast::<CheckResponse>();
+                        // SAFETY:
+                        // - Trust Agave to have allocated the batch/responses properly & told us
+                        //   the correct size.
+                        let (batch, responses) = unsafe {
+                            (
+                                TransactionPtrBatch::from_sharable_transaction_batch_region(
+                                    &msg.batch,
+                                    &self.allocator,
+                                ),
+                                CheckResponsesPtr::from_transaction_response_region(
+                                    &msg.responses,
+                                    &self.allocator,
+                                ),
+                            )
+                        };
 
-                        self.on_check_response(ptr, msg.responses.num_transaction_responses);
+                        self.queue_checked.extend(Self::on_check_response(
+                            &self.allocator,
+                            &batch,
+                            &responses,
+                        ));
                     }
                     worker_message_types::EXECUTION_RESPONSE => todo!(),
                     _ => panic!(),
@@ -146,7 +161,10 @@ impl GreedyScheduler {
             worker
                 .pack_to_worker
                 .try_write(PackToWorkerMessage {
-                    flags: pack_message_flags::CHECK,
+                    flags: pack_message_flags::CHECK
+                        | check_flags::STATUS_CHECKS
+                        | check_flags::LOAD_FEE_PAYER_BALANCE
+                        | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
                     max_working_slot: self.progress.current_slot + 1,
                     batch: Self::collect_batch(&self.allocator, || {
                         self.queue_unchecked.pop_front()
@@ -181,37 +199,44 @@ impl GreedyScheduler {
         }
     }
 
-    fn on_check_response(&self, batch: TransactionPtrBatch, responses: CheckResponsesPtr) {
+    fn on_check_response(
+        allocator: &Allocator,
+        batch: &TransactionPtrBatch,
+        responses: &CheckResponsesPtr,
+    ) -> impl Iterator<Item = SharableTransactionRegion> {
         assert_eq!(batch.len(), responses.len());
 
-        for (tx, rep) in batch.iter().zip(responses.iter().copied()) {
-            let parsing_failed =
-                rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
-            let status_failed = rep.status_check_flags
-                & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
-                != 0;
-            if parsing_failed || status_failed {
-                // TODO: Should this match the API of the other ptr types.
-                unsafe {
-                    tx.free(&self.allocator);
+        batch
+            .iter()
+            .zip(responses.iter().copied())
+            .filter_map(|(tx, rep)| {
+                let parsing_failed =
+                    rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
+                let status_failed = rep.status_check_flags
+                    & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
+                    != 0;
+                if parsing_failed || status_failed {
+                    // SAFETY:
+                    // - TX was previously allocated with this allocator.
+                    // - Trust Agave to not free this TX while returning it to us.
+                    unsafe { tx.free(allocator) }
+
+                    return None;
                 }
 
-                continue;
-            }
+                // Sanity check the flags.
+                assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0);
+                assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0);
+                assert_eq!(rep.resolve_flags, resolve_flags::REQUESTED | resolve_flags::PERFORMED);
+                assert_eq!(
+                    rep.fee_payer_balance_flags,
+                    fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED
+                );
 
-            // Sanity check the flags.
-            assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0);
-            assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0);
-            assert_eq!(rep.resolve_flags, resolve_flags::REQUESTED | resolve_flags::PERFORMED);
-            assert_eq!(
-                rep.fee_payer_balance_flags,
-                fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED
-            );
-
-            todo!()
-        }
-
-        todo!()
+                // SAFETY
+                // - TX was validly constructed as our code controls this.
+                Some(unsafe { tx.to_sharable_transaction_region(allocator) })
+            })
     }
 
     fn collect_batch(
@@ -261,9 +286,10 @@ mod tests {
     use std::os::fd::IntoRawFd;
     use std::ptr::NonNull;
 
+    use agave_scheduler_bindings::worker_message_types::CheckResponse;
     use agave_scheduler_bindings::{
-        SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage, processed_codes,
-        worker_message_types,
+        SharablePubkeys, SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage,
+        processed_codes, worker_message_types,
     };
     use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
@@ -369,6 +395,7 @@ mod tests {
     }
 
     struct Harness {
+        slot: u64,
         session: AgaveSession,
         scheduler: GreedyScheduler,
     }
@@ -392,7 +419,11 @@ mod tests {
             )
             .unwrap();
 
-            Self { session: agave_session, scheduler: GreedyScheduler::new(client_session) }
+            Self {
+                slot: 0,
+                session: agave_session,
+                scheduler: GreedyScheduler::new(client_session),
+            }
         }
 
         fn allocator(&self) -> &Allocator {
@@ -404,6 +435,8 @@ mod tests {
         }
 
         fn send_progress(&mut self, progress: ProgressMessage) {
+            self.slot = progress.current_slot;
+
             self.session.progress_tracker.sync();
             self.session.progress_tracker.try_write(progress).unwrap();
             self.session.progress_tracker.commit();
@@ -433,7 +466,26 @@ mod tests {
         }
 
         fn send_check_ok(&mut self, worker_index: usize, msg: PackToWorkerMessage) {
-            let (_, responses) = allocate_check_response_region(self.allocator(), 1).unwrap();
+            assert_eq!(msg.batch.num_transactions, 1);
+
+            let (mut response_ptr, responses) =
+                allocate_check_response_region(self.allocator(), 1).unwrap();
+            unsafe {
+                *response_ptr.as_mut() = CheckResponse {
+                    parsing_and_sanitization_flags: 0,
+                    status_check_flags: status_check_flags::REQUESTED
+                        | status_check_flags::PERFORMED,
+                    fee_payer_balance_flags: fee_payer_balance_flags::REQUESTED
+                        | fee_payer_balance_flags::PERFORMED,
+                    resolve_flags: resolve_flags::REQUESTED | resolve_flags::PERFORMED,
+                    included_slot: self.slot,
+                    balance_slot: self.slot,
+                    fee_payer_balance: u64::from(u32::MAX),
+                    resolution_slot: self.slot,
+                    min_alt_deactivation_slot: u64::MAX,
+                    resolved_pubkeys: SharablePubkeys { offset: 0, num_pubkeys: 0 },
+                };
+            }
 
             let queue = &mut self.session.workers[worker_index].worker_to_pack;
             queue.sync();
