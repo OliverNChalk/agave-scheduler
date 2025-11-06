@@ -1,4 +1,10 @@
-use agave_scheduler_bindings::{ProgressMessage, TpuToPackMessage};
+use std::collections::VecDeque;
+
+use agave_scheduler_bindings::{
+    IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
+    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
+    pack_message_flags,
+};
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use rts_alloc::Allocator;
 
@@ -7,10 +13,13 @@ pub struct GreedyScheduler {
     tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
     progress_tracker: shaq::Consumer<ProgressMessage>,
     workers: Vec<ClientWorkerSession>,
+
     progress: ProgressMessage,
+    queue: VecDeque<SharableTransactionRegion>,
 }
 
 impl GreedyScheduler {
+    #[must_use]
     pub fn new(
         ClientSession { mut allocators, tpu_to_pack, progress_tracker, workers }: ClientSession,
     ) -> Self {
@@ -21,6 +30,7 @@ impl GreedyScheduler {
             tpu_to_pack,
             progress_tracker,
             workers,
+
             progress: ProgressMessage {
                 leader_state: 0,
                 current_slot: 0,
@@ -29,6 +39,7 @@ impl GreedyScheduler {
                 remaining_cost_units: 0,
                 current_slot_progress: 0,
             },
+            queue: VecDeque::default(),
         }
     }
 
@@ -38,6 +49,14 @@ impl GreedyScheduler {
 
         // Drain responses from workers.
         self.drain_worker_responses();
+
+        // Ingest a bounded amount of new transactions.
+        self.drain_tpu(128);
+
+        // Schedule if we're currently the leader.
+        if self.progress.leader_state == IS_LEADER {
+            self.schedule();
+        }
     }
 
     fn drain_progress(&mut self) {
@@ -54,6 +73,71 @@ impl GreedyScheduler {
             while let Some(msg) = worker.worker_to_pack.try_read() {
                 println!("{msg:?}");
             }
+        }
+    }
+
+    fn drain_tpu(&mut self, max_count: usize) {
+        self.tpu_to_pack.sync();
+        for _ in 0..max_count {
+            let Some(msg) = self.tpu_to_pack.try_read() else {
+                return;
+            };
+
+            self.queue.push_back(msg.transaction);
+        }
+    }
+
+    fn schedule(&mut self) {
+        for worker in &mut self.workers {
+            worker.pack_to_worker.sync();
+
+            if self.queue.is_empty() {
+                continue;
+            }
+
+            // Allocate a batch that can hold all our transaction pointers.
+            let transactions = self
+                .allocator
+                .allocate(
+                    (core::mem::size_of::<SharableTransactionRegion>()
+                        * MAX_TRANSACTIONS_PER_MESSAGE) as u32,
+                )
+                .unwrap();
+            let transactions_offset = unsafe { self.allocator.offset(transactions) };
+
+            // Fill in the batch with transaction pointers.
+            let mut num_transactions = 0;
+            while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
+                let Some(tx) = self.queue.pop_front() else {
+                    break;
+                };
+
+                // SAFETY:
+                // - We have allocated the transaction batch to support at least
+                //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
+                //   region.
+                unsafe {
+                    self.allocator
+                        .ptr_from_offset(transactions_offset)
+                        .cast::<SharableTransactionRegion>()
+                        .add(num_transactions)
+                        .write(tx);
+                };
+
+                num_transactions += 1;
+            }
+
+            worker
+                .pack_to_worker
+                .try_write(PackToWorkerMessage {
+                    flags: pack_message_flags::EXECUTE,
+                    max_working_slot: self.progress.current_slot + 1,
+                    batch: SharableTransactionBatchRegion {
+                        num_transactions: num_transactions.try_into().unwrap(),
+                        transactions_offset,
+                    },
+                })
+                .unwrap();
         }
     }
 }
@@ -146,7 +230,7 @@ mod tests {
         fn setup() -> Self {
             let logon = ClientLogon {
                 worker_count: 4,
-                allocator_size: 1024 * 1024,
+                allocator_size: 16 * 1024 * 1024,
                 allocator_handles: 1,
                 tpu_to_pack_capacity: 16,
                 progress_tracker_capacity: 16,
