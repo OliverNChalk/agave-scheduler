@@ -1,11 +1,18 @@
 use std::collections::VecDeque;
+use std::ptr::NonNull;
 
+use agave_scheduler_bindings::worker_message_types::{
+    self, CheckResponse, fee_payer_balance_flags, parsing_and_sanitization_flags, resolve_flags,
+    status_check_flags,
+};
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
     SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
-    pack_message_flags,
+    pack_message_flags, processed_codes,
 };
+use agave_scheduling_utils::check_responses_ptr::CheckResponsesPtr;
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
+use agave_scheduling_utils::transaction_ptr::TransactionPtrBatch;
 use rts_alloc::Allocator;
 
 pub struct GreedyScheduler {
@@ -84,6 +91,36 @@ impl GreedyScheduler {
         for worker in &mut self.workers {
             worker.worker_to_pack.sync();
             while let Some(msg) = worker.worker_to_pack.try_read() {
+                match msg.processed_code {
+                    processed_codes::MAX_WORKING_SLOT_EXCEEDED => {
+                        // SAFETY
+                        // - Trust Agave to not have modified/freed this pointer.
+                        unsafe {
+                            let ptr = self
+                                .allocator
+                                .ptr_from_offset(msg.responses.transaction_responses_offset);
+                            self.allocator.free(ptr);
+                        }
+
+                        continue;
+                    }
+                    processed_codes::PROCESSED => {}
+                    _ => panic!(),
+                };
+
+                match msg.responses.tag {
+                    worker_message_types::CHECK_RESPONSE => {
+                        let ptr = self
+                            .allocator
+                            .ptr_from_offset(msg.responses.transaction_responses_offset)
+                            .cast::<CheckResponse>();
+
+                        self.on_check_response(ptr, msg.responses.num_transaction_responses);
+                    }
+                    worker_message_types::EXECUTION_RESPONSE => todo!(),
+                    _ => panic!(),
+                }
+
                 println!("{msg:?}");
             }
         }
@@ -142,6 +179,39 @@ impl GreedyScheduler {
                 .unwrap();
             worker.pack_to_worker.commit();
         }
+    }
+
+    fn on_check_response(&self, batch: TransactionPtrBatch, responses: CheckResponsesPtr) {
+        assert_eq!(batch.len(), responses.len());
+
+        for (tx, rep) in batch.iter().zip(responses.iter().copied()) {
+            let parsing_failed =
+                rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
+            let status_failed = rep.status_check_flags
+                & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
+                != 0;
+            if parsing_failed || status_failed {
+                // TODO: Should this match the API of the other ptr types.
+                unsafe {
+                    tx.free(&self.allocator);
+                }
+
+                continue;
+            }
+
+            // Sanity check the flags.
+            assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0);
+            assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0);
+            assert_eq!(rep.resolve_flags, resolve_flags::REQUESTED | resolve_flags::PERFORMED);
+            assert_eq!(
+                rep.fee_payer_balance_flags,
+                fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED
+            );
+
+            todo!()
+        }
+
+        todo!()
     }
 
     fn collect_batch(
