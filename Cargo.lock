@@ -604,7 +604,6 @@ version = "0.1.0"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
- "agave-transaction-view",
  "bincode",
  "rts-alloc",
  "shaq",
@@ -618,13 +617,10 @@ dependencies = [
 name = "greedy-external"
 version = "0.1.0"
 dependencies = [
- "agave-scheduler-bindings",
  "agave-scheduling-utils",
  "clap",
  "futures",
  "greedy",
- "rts-alloc",
- "shaq",
  "tokio",
  "toolbox",
  "tracing",
