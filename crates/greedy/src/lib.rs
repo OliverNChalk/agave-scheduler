@@ -54,7 +54,6 @@ impl GreedyScheduler {
         self.drain_worker_responses();
 
         // Ingest a bounded amount of new transactions.
-        self.drain_tpu(128);
         match is_leader {
             true => self.drain_tpu(128),
             false => self.drain_tpu(1024),
@@ -67,6 +66,9 @@ impl GreedyScheduler {
         if is_leader {
             self.schedule_execute();
         }
+
+        // TODO: Think about re-checking all TXs on slot roll (or at least
+        // expired TXs).
     }
 
     fn drain_progress(&mut self) {
