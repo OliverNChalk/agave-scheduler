@@ -71,7 +71,6 @@ impl GreedyScheduler {
 
         // Schedule if we're currently the leader.
         if is_leader {
-            println!("scheduling execute");
             self.schedule_execute();
         }
 
@@ -113,6 +112,8 @@ impl GreedyScheduler {
                         // SAFETY:
                         // - Trust Agave to have allocated the batch/responses properly & told us
                         //   the correct size.
+                        // - Use the correct wrapper type (check response ptr).
+                        // - Don't duplicate wrappers so we cannot double free.
                         let (batch, responses) = unsafe {
                             (
                                 TransactionPtrBatch::from_sharable_transaction_batch_region(
@@ -131,12 +132,29 @@ impl GreedyScheduler {
                             &batch,
                             &responses,
                         ));
+
+                        // Free both containers.
+                        batch.free();
+                        responses.free();
                     }
-                    worker_message_types::EXECUTION_RESPONSE => todo!(),
+                    worker_message_types::EXECUTION_RESPONSE => {
+                        // SAFETY:
+                        // - Trust Agave to have allocated the batch/responses properly & told us
+                        //   the correct size.
+                        unsafe {
+                            let ptr = self
+                                .allocator
+                                .ptr_from_offset(msg.batch.transactions_offset);
+                            self.allocator.free(ptr);
+
+                            let ptr = self
+                                .allocator
+                                .ptr_from_offset(msg.responses.transaction_responses_offset);
+                            self.allocator.free(ptr);
+                        };
+                    }
                     _ => panic!(),
                 }
-
-                println!("{msg:?}");
             }
         }
     }
@@ -184,7 +202,6 @@ impl GreedyScheduler {
             }
 
             let batch = Self::collect_batch(&self.allocator, || self.queue_checked.pop_front());
-            println!("scheduled: {}", batch.num_transactions);
 
             worker.pack_to_worker.sync();
             worker
@@ -317,7 +334,7 @@ mod tests {
         let (worker_index, message) = worker_requests.remove(0);
         assert_eq!(message.flags & 1, pack_message_flags::CHECK);
 
-        // Response with OK.
+        // Respond with OK.
         harness.send_check_ok(worker_index, message);
         harness.poll_scheduler();
 
@@ -357,16 +374,16 @@ mod tests {
         let (worker_index, message) = worker_requests.remove(0);
         assert_eq!(message.flags & 1, pack_message_flags::CHECK);
 
-        // Response with OK.
+        // Respond with OK.
         harness.send_check_ok(worker_index, message);
         harness.poll_scheduler();
 
-        // Assert - Scheduler does not schedule the valid TX.
-        assert!(harness.session.workers.iter_mut().all(|worker| {
-            worker.pack_to_worker.sync();
-
-            worker.pack_to_worker.is_empty()
-        }));
+        // Assert - A single request (to execute the TX) is sent.
+        let mut worker_requests = harness.drain_pack_to_workers();
+        assert_eq!(worker_requests.len(), 1);
+        let (_, message) = worker_requests.remove(0);
+        assert_eq!(message.flags & 1, pack_message_flags::EXECUTE);
+        assert_eq!(message.batch.num_transactions, 1);
     }
 
     struct Harness {
