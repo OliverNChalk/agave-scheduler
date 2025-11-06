@@ -95,10 +95,8 @@ impl GreedyScheduler {
                         // SAFETY
                         // - Trust Agave to not have modified/freed this pointer.
                         unsafe {
-                            let ptr = self
-                                .allocator
-                                .ptr_from_offset(msg.responses.transaction_responses_offset);
-                            self.allocator.free(ptr);
+                            self.allocator
+                                .free_offset(msg.responses.transaction_responses_offset);
                         }
 
                         continue;
@@ -142,15 +140,9 @@ impl GreedyScheduler {
                         // - Trust Agave to have allocated the batch/responses properly & told us
                         //   the correct size.
                         unsafe {
-                            let ptr = self
-                                .allocator
-                                .ptr_from_offset(msg.batch.transactions_offset);
-                            self.allocator.free(ptr);
-
-                            let ptr = self
-                                .allocator
-                                .ptr_from_offset(msg.responses.transaction_responses_offset);
-                            self.allocator.free(ptr);
+                            self.allocator.free_offset(msg.batch.transactions_offset);
+                            self.allocator
+                                .free_offset(msg.responses.transaction_responses_offset);
                         };
                     }
                     _ => panic!(),

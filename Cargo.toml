@@ -49,3 +49,6 @@ solana-transaction = "3.0.1"
 tokio = "1.48.0"
 toolbox.git = "https://github.com/OliverNChalk/toolbox-rs"
 tracing = "0.1.41"
+
+[patch.crates-io]
+rts-alloc.path = "../../apfitzge/rts-alloc"
