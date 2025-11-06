@@ -15,7 +15,8 @@ pub struct GreedyScheduler {
     workers: Vec<ClientWorkerSession>,
 
     progress: ProgressMessage,
-    queue: VecDeque<SharableTransactionRegion>,
+    queue_unchecked: VecDeque<SharableTransactionRegion>,
+    queue_checked: VecDeque<SharableTransactionRegion>,
 }
 
 impl GreedyScheduler {
@@ -39,23 +40,35 @@ impl GreedyScheduler {
                 remaining_cost_units: 0,
                 current_slot_progress: 0,
             },
-            queue: VecDeque::default(),
+            queue_unchecked: VecDeque::default(),
+            queue_checked: VecDeque::default(),
         }
     }
 
     pub fn poll(&mut self) {
         // Drain the progress tracker so we know which slot we're on.
         self.drain_progress();
+        let is_leader = self.progress.leader_state == IS_LEADER;
 
         // Drain responses from workers.
         self.drain_worker_responses();
 
         // Ingest a bounded amount of new transactions.
         self.drain_tpu(128);
+        match is_leader {
+            true => self.drain_tpu(128),
+            false => self.drain_tpu(1024),
+        }
+
+        // Schedule a bounded number of check jobs.
+        match is_leader {
+            true => self.schedule_checks(64),
+            false => self.schedule_checks(1024),
+        }
 
         // Schedule if we're currently the leader.
-        if self.progress.leader_state == IS_LEADER {
-            self.schedule();
+        if is_leader {
+            self.schedule_execute();
         }
     }
 
@@ -76,23 +89,27 @@ impl GreedyScheduler {
         }
     }
 
-    fn drain_tpu(&mut self, max_count: usize) {
+    fn drain_tpu(&mut self, max: usize) {
         self.tpu_to_pack.sync();
-        for _ in 0..max_count {
+        for _ in 0..max {
             let Some(msg) = self.tpu_to_pack.try_read() else {
                 return;
             };
             println!("{msg:?}");
 
-            self.queue.push_back(msg.transaction);
+            self.queue_unchecked.push_back(msg.transaction);
         }
     }
 
-    fn schedule(&mut self) {
+    fn schedule_checks(&mut self, max: usize) {
+        todo!()
+    }
+
+    fn schedule_execute(&mut self) {
         for worker in &mut self.workers {
             worker.pack_to_worker.sync();
 
-            if self.queue.is_empty() {
+            if self.queue_checked.is_empty() {
                 continue;
             }
 
@@ -109,7 +126,7 @@ impl GreedyScheduler {
             // Fill in the batch with transaction pointers.
             let mut num_transactions = 0;
             while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
-                let Some(tx) = self.queue.pop_front() else {
+                let Some(tx) = self.queue_checked.pop_front() else {
                     break;
                 };
 
