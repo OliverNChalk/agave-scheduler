@@ -254,14 +254,6 @@ mod tests {
         }));
     }
 
-    fn setup() -> (AgaveSession, GreedyScheduler) {
-        todo!()
-    }
-
-    fn simple_transfer(allocator: &Allocator) -> SharableTransactionRegion {
-        todo!()
-    }
-
     fn check_response() -> TransactionResponseRegion {
         todo!()
     }
