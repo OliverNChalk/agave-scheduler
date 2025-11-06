@@ -288,8 +288,7 @@ mod tests {
 
     use agave_scheduler_bindings::worker_message_types::CheckResponse;
     use agave_scheduler_bindings::{
-        SharablePubkeys, SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage,
-        processed_codes, worker_message_types,
+        SharablePubkeys, SharableTransactionRegion, WorkerToPackMessage, processed_codes,
     };
     use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
@@ -313,17 +312,7 @@ mod tests {
         harness.poll_scheduler();
 
         // Assert - A single request (to check the TX) is sent.
-        let mut worker_requests: Vec<_> = harness
-            .session
-            .workers
-            .iter_mut()
-            .enumerate()
-            .flat_map(|(i, worker)| {
-                worker.pack_to_worker.sync();
-
-                std::iter::from_fn(move || worker.pack_to_worker.try_read().map(|msg| (i, *msg)))
-            })
-            .collect();
+        let mut worker_requests = harness.drain_pack_to_workers();
         assert_eq!(worker_requests.len(), 1);
         let (worker_index, message) = worker_requests.remove(0);
         assert_eq!(message.flags & 1, pack_message_flags::CHECK);
@@ -363,17 +352,7 @@ mod tests {
         harness.poll_scheduler();
 
         // Assert - A single request (to check the TX) is sent.
-        let mut worker_requests: Vec<_> = harness
-            .session
-            .workers
-            .iter_mut()
-            .enumerate()
-            .flat_map(|(i, worker)| {
-                worker.pack_to_worker.sync();
-
-                std::iter::from_fn(move || worker.pack_to_worker.try_read().map(|msg| (i, *msg)))
-            })
-            .collect();
+        let mut worker_requests = harness.drain_pack_to_workers();
         assert_eq!(worker_requests.len(), 1);
         let (worker_index, message) = worker_requests.remove(0);
         assert_eq!(message.flags & 1, pack_message_flags::CHECK);
@@ -428,6 +407,21 @@ mod tests {
 
         fn poll_scheduler(&mut self) {
             self.scheduler.poll();
+        }
+
+        fn drain_pack_to_workers(&mut self) -> Vec<(usize, PackToWorkerMessage)> {
+            self.session
+                .workers
+                .iter_mut()
+                .enumerate()
+                .flat_map(|(i, worker)| {
+                    worker.pack_to_worker.sync();
+
+                    std::iter::from_fn(move || {
+                        worker.pack_to_worker.try_read().map(|msg| (i, *msg))
+                    })
+                })
+                .collect()
         }
 
         fn send_progress(&mut self, progress: ProgressMessage) {
