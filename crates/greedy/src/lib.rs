@@ -64,6 +64,7 @@ impl GreedyScheduler {
 
         // Schedule if we're currently the leader.
         if is_leader {
+            println!("scheduling execute");
             self.schedule_execute();
         }
 
@@ -102,7 +103,7 @@ impl GreedyScheduler {
     fn schedule_checks(&mut self) {
         // TODO: Need to figure out how back pressure works when the check worker is not
         // keeping up.
-        while !self.queue_checked.is_empty() {
+        while !self.queue_unchecked.is_empty() {
             let worker = &mut self.workers[0];
             worker.pack_to_worker.sync();
             worker
@@ -128,6 +129,7 @@ impl GreedyScheduler {
             }
 
             let batch = Self::collect_batch(&self.allocator, || self.queue_checked.pop_front());
+            println!("scheduled: {}", batch.num_transactions);
 
             worker.pack_to_worker.sync();
             worker
@@ -191,9 +193,11 @@ mod tests {
 
     use agave_scheduler_bindings::{
         SharableTransactionRegion, TransactionResponseRegion, WorkerToPackMessage, processed_codes,
+        worker_message_types,
     };
     use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
+    use agave_scheduling_utils::responses_region::allocate_check_response_region;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Pubkey};
     use solana_transaction::Transaction;
@@ -201,7 +205,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_on_ingest() {
+    fn check_no_schedule() {
+        let mut harness = Harness::setup();
+
+        // Ingest a simple transfer.
+        let from = Keypair::new();
+        let to = Pubkey::new_unique();
+        harness.send_tx(&solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()));
+
+        // Poll the greedy scheduler.
+        harness.poll_scheduler();
+
+        // Assert - A single request (to check the TX) is sent.
+        let mut worker_requests: Vec<_> = harness
+            .session
+            .workers
+            .iter_mut()
+            .enumerate()
+            .flat_map(|(i, worker)| {
+                worker.pack_to_worker.sync();
+
+                std::iter::from_fn(move || worker.pack_to_worker.try_read().map(|msg| (i, *msg)))
+            })
+            .collect();
+        assert_eq!(worker_requests.len(), 1);
+        let (worker_index, message) = worker_requests.remove(0);
+        assert_eq!(message.flags & 1, pack_message_flags::CHECK);
+
+        // Response with OK.
+        harness.send_check_ok(worker_index, message);
+        harness.poll_scheduler();
+
+        // Assert - Scheduler does not schedule the valid TX.
+        assert!(harness.session.workers.iter_mut().all(|worker| {
+            worker.pack_to_worker.sync();
+
+            worker.pack_to_worker.is_empty()
+        }));
+    }
+
+    #[test]
+    fn check_then_schedule() {
         let mut harness = Harness::setup();
 
         // Notify the scheduler that node is now leader.
@@ -222,7 +266,7 @@ mod tests {
         // Poll the greedy scheduler.
         harness.poll_scheduler();
 
-        // Assert - One worker is requested to check the transaction.
+        // Assert - A single request (to check the TX) is sent.
         let mut worker_requests: Vec<_> = harness
             .session
             .workers
@@ -236,17 +280,11 @@ mod tests {
             .collect();
         assert_eq!(worker_requests.len(), 1);
         let (worker_index, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, 0);
+        assert_eq!(message.flags & 1, pack_message_flags::CHECK);
 
-        // Queue the mock worker response.
-        harness.session.workers[worker_index]
-            .worker_to_pack
-            .try_write(WorkerToPackMessage {
-                batch: message.batch,
-                processed_code: processed_codes::PROCESSED,
-                responses: check_response(),
-            })
-            .unwrap();
+        // Response with OK.
+        harness.send_check_ok(worker_index, message);
+        harness.poll_scheduler();
 
         // Assert - Scheduler does not schedule the valid TX.
         assert!(harness.session.workers.iter_mut().all(|worker| {
@@ -287,6 +325,10 @@ mod tests {
             Self { session: agave_session, scheduler: GreedyScheduler::new(client_session) }
         }
 
+        fn allocator(&self) -> &Allocator {
+            &self.session.tpu_to_pack.allocator
+        }
+
         fn poll_scheduler(&mut self) {
             self.scheduler.poll();
         }
@@ -320,8 +362,19 @@ mod tests {
             self.session.tpu_to_pack.producer.commit();
         }
 
-        fn allocator(&self) -> &Allocator {
-            &self.session.tpu_to_pack.allocator
+        fn send_check_ok(&mut self, worker_index: usize, msg: PackToWorkerMessage) {
+            let (_, responses) = allocate_check_response_region(self.allocator(), 1).unwrap();
+
+            let queue = &mut self.session.workers[worker_index].worker_to_pack;
+            queue.sync();
+            queue
+                .try_write(WorkerToPackMessage {
+                    batch: msg.batch,
+                    processed_code: processed_codes::PROCESSED,
+                    responses,
+                })
+                .unwrap();
+            queue.commit();
         }
     }
 }
