@@ -130,6 +130,7 @@ impl GreedyScheduler {
 
             println!("created batch with {num_transactions} txs");
 
+            worker.pack_to_worker.sync();
             worker
                 .pack_to_worker
                 .try_write(PackToWorkerMessage {
@@ -141,6 +142,7 @@ impl GreedyScheduler {
                     },
                 })
                 .unwrap();
+            worker.pack_to_worker.commit();
         }
     }
 }
