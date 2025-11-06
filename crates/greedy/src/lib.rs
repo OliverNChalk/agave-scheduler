@@ -101,22 +101,20 @@ impl GreedyScheduler {
         // TODO: Need to figure out how back pressure works when the check worker is not
         // keeping up.
         while !self.queue_checked.is_empty() {
-            self.schedule_check_batch();
+            let worker = &mut self.workers[0];
+            worker.pack_to_worker.sync();
+            worker
+                .pack_to_worker
+                .try_write(PackToWorkerMessage {
+                    flags: pack_message_flags::CHECK,
+                    max_working_slot: self.progress.current_slot + 1,
+                    batch: Self::collect_batch(&self.allocator, || {
+                        self.queue_unchecked.pop_front()
+                    }),
+                })
+                .unwrap();
+            worker.pack_to_worker.commit();
         }
-    }
-
-    fn schedule_check_batch(&mut self) {
-        let worker = &mut self.workers[0];
-        worker.pack_to_worker.sync();
-        worker
-            .pack_to_worker
-            .try_write(PackToWorkerMessage {
-                flags: pack_message_flags::CHECK,
-                max_working_slot: self.progress.current_slot + 1,
-                batch: Self::collect_batch(&self.allocator, || self.queue_unchecked.pop_front()),
-            })
-            .unwrap();
-        worker.pack_to_worker.commit();
     }
 
     fn schedule_execute(&mut self) {
