@@ -82,6 +82,7 @@ impl GreedyScheduler {
             let Some(msg) = self.tpu_to_pack.try_read() else {
                 return;
             };
+            println!("{msg:?}");
 
             self.queue.push_back(msg.transaction);
         }
@@ -127,6 +128,8 @@ impl GreedyScheduler {
                 num_transactions += 1;
             }
 
+            println!("created batch with {num_transactions} txs");
+
             worker
                 .pack_to_worker
                 .try_write(PackToWorkerMessage {
@@ -162,15 +165,20 @@ mod tests {
     fn check_on_ingest() {
         let mut harness = Harness::setup();
 
+        // Notify the scheduler that node is now leader.
+        harness.send_progress(ProgressMessage {
+            leader_state: IS_LEADER,
+            current_slot: 10,
+            next_leader_slot: 11,
+            leader_range_end: 11,
+            remaining_cost_units: 10_000_000,
+            current_slot_progress: 25,
+        });
+
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.ingest_transaction(&solana_system_transaction::transfer(
-            &from,
-            &to,
-            1,
-            Hash::new_unique(),
-        ));
+        harness.send_tx(&solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()));
 
         // Poll the greedy scheduler.
         harness.poll_scheduler();
@@ -252,7 +260,13 @@ mod tests {
             self.scheduler.poll();
         }
 
-        fn ingest_transaction(&mut self, tx: &Transaction) {
+        fn send_progress(&mut self, progress: ProgressMessage) {
+            self.session.progress_tracker.sync();
+            self.session.progress_tracker.try_write(progress).unwrap();
+            self.session.progress_tracker.commit();
+        }
+
+        fn send_tx(&mut self, tx: &Transaction) {
             // Serialize & copy the pointer to shared memory.
             let mut packet = bincode::serialize(&tx).unwrap();
             let packet_len = packet.len().try_into().unwrap();
@@ -266,6 +280,7 @@ mod tests {
             let offset = unsafe { self.allocator().offset(pointer) };
             let tx = SharableTransactionRegion { offset, length: packet_len };
 
+            self.session.tpu_to_pack.producer.sync();
             self.session
                 .tpu_to_pack
                 .producer
