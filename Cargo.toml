@@ -37,6 +37,7 @@ trivially_copy_pass_by_ref = "warn"
 agave-scheduler-bindings.path = "../agave/scheduler-bindings"
 agave-scheduling-utils.path = "../agave/scheduling-utils"
 agave-transaction-view.path = "../agave/transaction-view"
+bincode = "1.3.3"
 clap = "4.5.51"
 futures = { version = "0.3.31", default-features = false }
 greedy.path = "./crates/greedy"

@@ -15,7 +15,7 @@ rts-alloc.workspace = true
 shaq.workspace = true
 
 [dev-dependencies]
-bincode = "1.3.3"
+bincode.workspace = true
 solana-hash.workspace = true
 solana-keypair.workspace = true
 solana-system-transaction.workspace = true
