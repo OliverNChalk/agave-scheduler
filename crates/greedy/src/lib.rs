@@ -390,10 +390,6 @@ mod tests {
         }));
     }
 
-    fn check_response() -> TransactionResponseRegion {
-        todo!()
-    }
-
     struct Harness {
         slot: u64,
         session: AgaveSession,
