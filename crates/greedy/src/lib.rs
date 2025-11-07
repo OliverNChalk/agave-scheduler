@@ -1,5 +1,7 @@
-use std::collections::VecDeque;
+#[macro_use]
+extern crate static_assertions;
 
+use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
     self, fee_payer_balance_flags, parsing_and_sanitization_flags, resolve_flags,
@@ -12,8 +14,28 @@ use agave_scheduler_bindings::{
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::responses_region::CheckResponsesPtr;
-use agave_scheduling_utils::transaction_ptr::TransactionPtrBatch;
+use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
+use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
+use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
+use slotmap::SlotMap;
+use solana_compute_budget_instruction::compute_budget_instruction_details;
+use solana_cost_model::cost_model::CostModel;
+use solana_fee::FeeFeatures;
+use solana_fee_structure::FeeBudgetLimits;
+use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
+use solana_svm_transaction::svm_message::SVMStaticMessage;
+use solana_transaction::sanitized::MessageHash;
+
+const UNCHECKED_CAPACITY: usize = 64 * 1024;
+const CHECKED_CAPACITY: usize = 64 * 1024;
+const STATE_CAPACITY: usize = UNCHECKED_CAPACITY + CHECKED_CAPACITY;
+
+const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
+const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
+const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE;
+const_assert!(TX_BATCH_SIZE < 4096);
+const TX_BATCH_META_OFFSET: usize = TX_REGION_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
 
 pub struct GreedyScheduler {
     allocator: Allocator,
@@ -22,8 +44,16 @@ pub struct GreedyScheduler {
     workers: Vec<ClientWorkerSession>,
 
     progress: ProgressMessage,
-    queue_unchecked: VecDeque<SharableTransactionRegion>,
-    queue_checked: VecDeque<SharableTransactionRegion>,
+    runtime: RuntimeState,
+    // TODO
+    // - On transaction ingest, translate & determine priority based on CU price & limit.
+    //   - Store prioritized but unchecked transactions MinMaxHeap.
+    //   - Store prioritized & checked transactions MinMaxHeap.
+    //   - Store transaction state in slotmap.
+    unchecked: MinMaxHeap<PriorityId>,
+    checked: MinMaxHeap<PriorityId>,
+    // TODO: If iterating need to use hop/dense map.
+    state: SlotMap<TransactionStateKey, SharableTransactionRegion>,
 }
 
 impl GreedyScheduler {
@@ -47,8 +77,15 @@ impl GreedyScheduler {
                 remaining_cost_units: 0,
                 current_slot_progress: 0,
             },
-            queue_unchecked: VecDeque::default(),
-            queue_checked: VecDeque::default(),
+            runtime: RuntimeState {
+                feature_set: FeatureSet::all_enabled(),
+                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
+                lamports_per_signature: 5000,
+                burn_percent: 50,
+            },
+            unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            state: SlotMap::with_capacity_and_key(STATE_CAPACITY),
         }
     }
 
@@ -125,11 +162,18 @@ impl GreedyScheduler {
                             )
                         };
 
-                        self.queue_checked.extend(Self::on_check_response(
-                            &self.allocator,
-                            &batch,
-                            &responses,
-                        ));
+                        for tx in Self::on_check_response(&self.allocator, &batch, &responses) {
+                            // Evict lowest priority if at capacity.
+                            if self.checked.len() == CHECKED_CAPACITY {
+                                let evicted = self.checked.pop_min().unwrap();
+                                self.state.remove(evicted.key).unwrap();
+                            }
+
+                            // Insert the new transaction (yes this may be lower priority then what
+                            // we just evicted but that's fine).
+                            self.checked
+                                .push(todo!("Store PriorityId in SharableTransactionRegion"));
+                        }
 
                         // Free both containers.
                         batch.free();
@@ -153,21 +197,51 @@ impl GreedyScheduler {
 
     fn drain_tpu(&mut self, max: usize) {
         self.tpu_to_pack.sync();
-        for _ in 0..max {
-            let Some(msg) = self.tpu_to_pack.try_read() else {
-                return;
-            };
 
-            self.queue_unchecked.push_back(msg.transaction);
+        let additional = std::cmp::min(self.tpu_to_pack.len(), max);
+        let shortfall = (self.checked.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
+
+        // NB: Technically we are evicting more than we need to because not all of
+        // `additional` will parse correctly & thus have a priority.
+        for _ in 0..shortfall {
+            let id = self.unchecked.pop_min().unwrap();
+            let tx = self.state.remove(id.key).unwrap();
+
+            // SAFETY:
+            // - Trust Agave to behave correctly and not free these transactions.
+            // - We have not previously freed this transaction as each region has a single
+            //   unique entry in `self.state`.
+            unsafe {
+                self.allocator.free_offset(tx.offset);
+            }
+        }
+
+        // TODO: Need to dedupe already seen transactions.
+
+        for _ in 0..additional {
+            let msg = self.tpu_to_pack.try_read().unwrap();
+
+            match Self::calculate_priority(&self.runtime, &self.allocator, msg) {
+                Some(priority) => {
+                    let key = self.state.insert(msg.transaction);
+                    self.unchecked.push(PriorityId { priority, key });
+                }
+                None => todo!("free"),
+            }
         }
     }
 
     fn schedule_checks(&mut self) {
-        // TODO: Need to figure out how back pressure works when the check worker is not
-        // keeping up.
-        while !self.queue_unchecked.is_empty() {
-            let worker = &mut self.workers[0];
-            worker.pack_to_worker.sync();
+        let worker = &mut self.workers[0];
+        worker.pack_to_worker.sync();
+
+        // Loop until worker queue is filled or backlog is empty.
+        let worker_capacity = worker.pack_to_worker.capacity();
+        for _ in 0..worker_capacity {
+            if self.unchecked.is_empty() {
+                break;
+            }
+
             worker
                 .pack_to_worker
                 .try_write(PackToWorkerMessage {
@@ -177,23 +251,26 @@ impl GreedyScheduler {
                         | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
                     max_working_slot: self.progress.current_slot + 1,
                     batch: Self::collect_batch(&self.allocator, || {
-                        self.queue_unchecked.pop_front()
+                        self.unchecked.pop_max().map(|id| (id, self.state[id.key]))
                     }),
                 })
                 .unwrap();
-            worker.pack_to_worker.commit();
         }
+
+        worker.pack_to_worker.commit();
     }
 
     fn schedule_execute(&mut self) {
         for worker in &mut self.workers[1..] {
             worker.pack_to_worker.sync();
 
-            if self.queue_checked.is_empty() {
+            if self.checked.is_empty() {
                 continue;
             }
 
-            let batch = Self::collect_batch(&self.allocator, || self.queue_checked.pop_front());
+            let batch = Self::collect_batch(&self.allocator, || {
+                self.checked.pop_max().map(|id| (id, self.state[id.key]))
+            });
 
             worker.pack_to_worker.sync();
             worker
@@ -210,6 +287,8 @@ impl GreedyScheduler {
 
     fn on_check_response(
         allocator: &Allocator,
+        // TODO: Return META value in batch iterator. Also maybe move constants into tx ptr batch
+        // so we can maintain the invariants more easily.
         batch: &TransactionPtrBatch,
         responses: &CheckResponsesPtr,
     ) -> impl Iterator<Item = SharableTransactionRegion> {
@@ -250,21 +329,30 @@ impl GreedyScheduler {
 
     fn collect_batch(
         allocator: &Allocator,
-        mut pop: impl FnMut() -> Option<SharableTransactionRegion>,
+        mut pop: impl FnMut() -> Option<(PriorityId, SharableTransactionRegion)>,
     ) -> SharableTransactionBatchRegion {
         // Allocate a batch that can hold all our transaction pointers.
-        let transactions = allocator
-            .allocate(
-                (core::mem::size_of::<SharableTransactionRegion>() * MAX_TRANSACTIONS_PER_MESSAGE)
-                    as u32,
-            )
-            .unwrap();
+        let transactions = allocator.allocate(TX_BATCH_SIZE as u32).unwrap();
         let transactions_offset = unsafe { allocator.offset(transactions) };
+
+        // Get our two pointers to the TX region & meta region.
+        let tx_ptr = allocator
+            .ptr_from_offset(transactions_offset)
+            .cast::<SharableTransactionRegion>();
+        // SAFETY:
+        // - Pointer is guaranteed to not overrun the allocation as we just created it
+        //   with a sufficient size.
+        let meta_ptr = unsafe {
+            allocator
+                .ptr_from_offset(transactions_offset)
+                .byte_add(TX_BATCH_META_OFFSET)
+                .cast::<PriorityId>()
+        };
 
         // Fill in the batch with transaction pointers.
         let mut num_transactions = 0;
         while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
-            let Some(tx) = pop() else {
+            let Some((id, tx)) = pop() else {
                 break;
             };
 
@@ -273,11 +361,8 @@ impl GreedyScheduler {
             //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
             //   region.
             unsafe {
-                allocator
-                    .ptr_from_offset(transactions_offset)
-                    .cast::<SharableTransactionRegion>()
-                    .add(num_transactions)
-                    .write(tx);
+                tx_ptr.add(num_transactions).write(tx);
+                meta_ptr.add(num_transactions).write(id);
             };
 
             num_transactions += 1;
@@ -288,6 +373,94 @@ impl GreedyScheduler {
             transactions_offset,
         }
     }
+
+    fn calculate_priority(
+        runtime: &RuntimeState,
+        allocator: &Allocator,
+        msg: &TpuToPackMessage,
+    ) -> Option<u64> {
+        let tx = SanitizedTransactionView::try_new_sanitized(
+            // SAFETY:
+            // - Trust Agave to have allocated the shared transactin region correctly.
+            // - `SanitizedTransactionView` does not free the allocation on drop.
+            unsafe {
+                TransactionPtr::from_sharable_transaction_region(&msg.transaction, allocator)
+            },
+            true,
+        )
+        .ok()?;
+        let tx = RuntimeTransaction::<TransactionView<true, TransactionPtr>>::try_from(
+            tx,
+            MessageHash::Compute,
+            None,
+        )
+        .ok()?;
+
+        // Compute transaction cost.
+        let compute_budget_limits =
+            compute_budget_instruction_details::ComputeBudgetInstructionDetails::try_from(
+                tx.program_instructions_iter(),
+            )
+            .ok()?
+            .sanitize_and_convert_to_compute_budget_limits(&runtime.feature_set)
+            .ok()?;
+        let fee_budget_limits = FeeBudgetLimits::from(compute_budget_limits);
+        let cost = CostModel::calculate_cost(&tx, &runtime.feature_set).sum();
+
+        // Compute transaction reward.
+        let fee_details = solana_fee::calculate_fee_details(
+            &tx,
+            false,
+            runtime.lamports_per_signature,
+            fee_budget_limits.prioritization_fee,
+            runtime.fee_features,
+        );
+        let burn = fee_details
+            .transaction_fee()
+            .checked_mul(runtime.burn_percent)?
+            / 100;
+        let base_fee = fee_details.transaction_fee() - burn;
+        let reward = base_fee.saturating_add(fee_details.prioritization_fee());
+
+        // Compute priority.
+        Some(
+            reward
+                .saturating_mul(1_000_000)
+                .saturating_div(cost.saturating_add(1)),
+        )
+    }
+}
+
+struct RuntimeState {
+    feature_set: FeatureSet,
+    fee_features: FeeFeatures,
+    lamports_per_signature: u64,
+    burn_percent: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+struct PriorityId {
+    priority: u64,
+    key: TransactionStateKey,
+}
+
+impl PartialOrd for PriorityId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PriorityId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.priority
+            .cmp(&other.priority)
+            .then_with(|| self.key.cmp(&other.key))
+    }
+}
+
+slotmap::new_key_type! {
+    struct TransactionStateKey;
 }
 
 #[cfg(test)]
