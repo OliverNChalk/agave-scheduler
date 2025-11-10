@@ -1,6 +1,6 @@
 mod args;
 mod control_thread;
-mod worker_thread;
+mod scheduler_thread;
 
 fn main() -> std::thread::Result<()> {
     use clap::Parser;
@@ -25,5 +25,5 @@ fn main() -> std::thread::Result<()> {
     }));
 
     // Start server.
-    ControlThread::run_in_place()
+    ControlThread::run_in_place(args.bindings_ipc)
 }

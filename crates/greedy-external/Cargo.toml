@@ -9,8 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }
+greedy.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }
 toolbox = { workspace = true, features = ["named_task", "shutdown", "tracing", "version"] }
 tracing.workspace = true

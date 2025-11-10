@@ -5,9 +5,9 @@ use clap::{Parser, ValueHint};
 #[derive(Debug, Parser)]
 #[command(version = toolbox::version!(), long_version = toolbox::long_version!())]
 pub(crate) struct Args {
-    /// Path to config file.
+    /// Path to scheduler bindings ipc server.
     #[clap(long, value_hint = ValueHint::FilePath)]
-    pub(crate) config: PathBuf,
+    pub(crate) bindings_ipc: PathBuf,
     /// If provided, will write hourly log files to this directory.
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub(crate) logs: Option<PathBuf>,
