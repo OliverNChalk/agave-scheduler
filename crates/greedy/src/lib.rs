@@ -162,7 +162,8 @@ impl GreedyScheduler {
                             )
                         };
 
-                        for tx in Self::on_check_response(&self.allocator, &batch, &responses) {
+                        for (_, id) in Self::on_check_response(&self.allocator, &batch, &responses)
+                        {
                             // Evict lowest priority if at capacity.
                             if self.checked.len() == CHECKED_CAPACITY {
                                 let evicted = self.checked.pop_min().unwrap();
@@ -171,8 +172,7 @@ impl GreedyScheduler {
 
                             // Insert the new transaction (yes this may be lower priority then what
                             // we just evicted but that's fine).
-                            self.checked
-                                .push(todo!("Store PriorityId in SharableTransactionRegion"));
+                            self.checked.push(id);
                         }
 
                         // Free both containers.
@@ -289,15 +289,15 @@ impl GreedyScheduler {
         allocator: &Allocator,
         // TODO: Return META value in batch iterator. Also maybe move constants into tx ptr batch
         // so we can maintain the invariants more easily.
-        batch: &TransactionPtrBatch,
+        batch: &TransactionPtrBatch<PriorityId>,
         responses: &CheckResponsesPtr,
-    ) -> impl Iterator<Item = SharableTransactionRegion> {
+    ) -> impl Iterator<Item = (SharableTransactionRegion, PriorityId)> {
         assert_eq!(batch.len(), responses.len());
 
         batch
             .iter()
             .zip(responses.iter().copied())
-            .filter_map(|(tx, rep)| {
+            .filter_map(|((tx, meta), rep)| {
                 let parsing_failed =
                     rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
                 let status_failed = rep.status_check_flags
@@ -323,7 +323,7 @@ impl GreedyScheduler {
 
                 // SAFETY
                 // - TX was validly constructed as our code controls this.
-                Some(unsafe { tx.to_sharable_transaction_region(allocator) })
+                Some((unsafe { tx.to_sharable_transaction_region(allocator) }, meta))
             })
     }
 
