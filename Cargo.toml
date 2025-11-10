@@ -6,9 +6,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 authors = ["Oliver Chalk"]
-license = "MIT OR Apache-2.0"
-homepage = "TEMP"
-repository = "TEMP"
+license = "Apache-2.0"
 
 [workspace.lints.clippy]
 cast_possible_truncation = "allow"
