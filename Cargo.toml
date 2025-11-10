@@ -47,12 +47,14 @@ slotmap = "1.0.7"
 solana-compute-budget-instruction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-cost-model = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-fee = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
+solana-fee-structure = "3.0.0"
 solana-hash = "3.0.1"
 solana-keypair = "3.0.1"
 solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-svm-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-system-transaction = "3.0.0"
 solana-transaction = "3.0.1"
+static_assertions = "1.1.0"
 tokio = "1.48.0"
 toolbox.git = "https://github.com/OliverNChalk/toolbox-rs"
 tracing = "0.1.41"

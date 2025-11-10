@@ -20,11 +20,11 @@ slotmap.workspace = true
 solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
 solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee = { workspace = true, features = ["agave-unstable-api"] }
-solana-fee-structure = "3.0.0"
+solana-fee-structure.workspace = true
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
 solana-svm-transaction.workspace = true
 solana-transaction.workspace = true
-static_assertions = "1.1.0"
+static_assertions.workspace = true
 
 [dev-dependencies]
 bincode.workspace = true
