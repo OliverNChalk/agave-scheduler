@@ -45,14 +45,8 @@ pub struct GreedyScheduler {
 
     progress: ProgressMessage,
     runtime: RuntimeState,
-    // TODO
-    // - On transaction ingest, translate & determine priority based on CU price & limit.
-    //   - Store prioritized but unchecked transactions MinMaxHeap.
-    //   - Store prioritized & checked transactions MinMaxHeap.
-    //   - Store transaction state in slotmap.
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
-    // TODO: If iterating need to use hop/dense map.
     state: SlotMap<TransactionStateKey, SharableTransactionRegion>,
 }
 
@@ -112,7 +106,8 @@ impl GreedyScheduler {
         }
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
-        // expired TXs).
+        // expired TXs). If we do this we should use a dense slotmap to make
+        // iteration fast.
     }
 
     fn drain_progress(&mut self) {
@@ -292,8 +287,6 @@ impl GreedyScheduler {
 
     fn on_check_response(
         allocator: &Allocator,
-        // TODO: Return META value in batch iterator. Also maybe move constants into tx ptr batch
-        // so we can maintain the invariants more easily.
         batch: &TransactionPtrBatch<PriorityId>,
         responses: &CheckResponsesPtr,
     ) -> impl Iterator<Item = (SharableTransactionRegion, PriorityId)> {
