@@ -226,7 +226,12 @@ impl GreedyScheduler {
                     let key = self.state.insert(msg.transaction);
                     self.unchecked.push(PriorityId { priority, key });
                 }
-                None => todo!("free"),
+                // SAFETY:
+                // - Trust Agave to have correctly allocated & trenferred ownership of this
+                //   transactin region to us.
+                None => unsafe {
+                    self.allocator.free_offset(msg.transaction.offset);
+                },
             }
         }
     }
