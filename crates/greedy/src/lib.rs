@@ -223,7 +223,7 @@ impl GreedyScheduler {
                 }
                 // SAFETY:
                 // - Trust Agave to have correctly allocated & trenferred ownership of this
-                //   transactin region to us.
+                //   transaction region to us.
                 None => unsafe {
                     self.allocator.free_offset(msg.transaction.offset);
                 },
