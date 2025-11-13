@@ -183,6 +183,7 @@ impl GreedyScheduler {
                         // - Trust Agave to have allocated the batch/responses properly & told us
                         //   the correct size.
                         unsafe {
+                            // TODO: Need to also free each transaction in the batch.
                             self.allocator.free_offset(msg.batch.transactions_offset);
                             self.allocator
                                 .free_offset(msg.responses.transaction_responses_offset);
@@ -221,9 +222,9 @@ impl GreedyScheduler {
             let msg = self.tpu_to_pack.try_read().unwrap();
 
             match Self::calculate_priority(&self.runtime, &self.allocator, msg) {
-                Some(priority) => {
+                Some((priority, cost)) => {
                     let key = self.state.insert(msg.transaction);
-                    self.unchecked.push(PriorityId { priority, key });
+                    self.unchecked.push(PriorityId { priority, cost, key });
                 }
                 // SAFETY:
                 // - Trust Agave to have correctly allocated & trenferred ownership of this
@@ -380,7 +381,7 @@ impl GreedyScheduler {
         runtime: &RuntimeState,
         allocator: &Allocator,
         msg: &TpuToPackMessage,
-    ) -> Option<u64> {
+    ) -> Option<(u64, u32)> {
         let tx = SanitizedTransactionView::try_new_sanitized(
             // SAFETY:
             // - Trust Agave to have allocated the shared transactin region correctly.
@@ -425,11 +426,13 @@ impl GreedyScheduler {
         let reward = base_fee.saturating_add(fee_details.prioritization_fee());
 
         // Compute priority.
-        Some(
+        Some((
             reward
                 .saturating_mul(1_000_000)
                 .saturating_div(cost.saturating_add(1)),
-        )
+            // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
+            cost.try_into().unwrap(),
+        ))
     }
 }
 
@@ -444,6 +447,7 @@ struct RuntimeState {
 #[repr(C)]
 struct PriorityId {
     priority: u64,
+    cost: u32,
     key: TransactionStateKey,
 }
 
@@ -457,6 +461,7 @@ impl Ord for PriorityId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.priority
             .cmp(&other.priority)
+            .then_with(|| self.cost.cmp(&other.cost))
             .then_with(|| self.key.cmp(&other.key))
     }
 }
