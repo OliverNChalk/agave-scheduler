@@ -162,7 +162,11 @@ impl GreedyScheduler {
                             // Evict lowest priority if at capacity.
                             if self.checked.len() == CHECKED_CAPACITY {
                                 let evicted = self.checked.pop_min().unwrap();
-                                self.state.remove(evicted.key).unwrap();
+                                let tx = self.state.remove(evicted.key).unwrap();
+                                // SAFETY
+                                // - We own this transaction and do not duplicate it so it will not
+                                //   get double freed.
+                                unsafe { self.allocator.free_offset(tx.offset) };
                             }
 
                             // Insert the new transaction (yes this may be lower priority then what
