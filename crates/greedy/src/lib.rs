@@ -175,7 +175,7 @@ impl GreedyScheduler {
                         }
 
                         // Free both containers.
-                        batch.free(); // OLI: This will double free the transactions in the batch.
+                        batch.free();
                         responses.free();
                     }
                     worker_message_types::EXECUTION_RESPONSE => {
