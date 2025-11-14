@@ -11,7 +11,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "agave-feature-set"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -24,12 +24,12 @@ dependencies = [
 [[package]]
 name = "agave-scheduler-bindings"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 
 [[package]]
 name = "agave-scheduling-utils"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-scheduler-bindings",
  "agave-transaction-view",
@@ -46,7 +46,7 @@ dependencies = [
 [[package]]
 name = "agave-syscalls"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "bincode",
  "libsecp256k1",
@@ -88,7 +88,7 @@ dependencies = [
 [[package]]
 name = "agave-transaction-view"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "solana-hash 3.1.0",
  "solana-message",
@@ -1191,6 +1191,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1331,16 +1337,20 @@ dependencies = [
  "agave-scheduling-utils",
  "agave-transaction-view",
  "bincode",
+ "hashbrown 0.16.0",
  "min-max-heap",
  "rts-alloc",
  "shaq",
  "slotmap",
  "solana-compute-budget-instruction",
+ "solana-compute-budget-interface",
  "solana-cost-model",
  "solana-fee",
  "solana-fee-structure",
  "solana-hash 3.1.0",
  "solana-keypair",
+ "solana-message",
+ "solana-pubkey 3.0.0",
  "solana-runtime-transaction",
  "solana-svm-transaction",
  "solana-system-transaction",
@@ -1404,6 +1414,11 @@ name = "hashbrown"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
+]
 
 [[package]]
 name = "heck"
@@ -2768,6 +2783,7 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e37320fd2945c5d654b2c6210624a52d66c3f1f73b653ed211ab91a703b35bdd"
 dependencies = [
+ "borsh",
  "curve25519-dalek",
  "five8 1.0.0",
  "five8_const",
@@ -2849,7 +2865,7 @@ dependencies = [
 [[package]]
 name = "solana-bpf-loader-program"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-syscalls",
  "bincode",
@@ -2877,7 +2893,7 @@ dependencies = [
 [[package]]
 name = "solana-builtins-default-costs"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-feature-set",
  "ahash",
@@ -2916,7 +2932,7 @@ dependencies = [
 [[package]]
 name = "solana-compute-budget"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "solana-fee-structure",
  "solana-program-runtime",
@@ -2925,7 +2941,7 @@ dependencies = [
 [[package]]
 name = "solana-compute-budget-instruction"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-feature-set",
  "log",
@@ -2956,7 +2972,7 @@ dependencies = [
 [[package]]
 name = "solana-compute-budget-program"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "solana-program-runtime",
 ]
@@ -2964,7 +2980,7 @@ dependencies = [
 [[package]]
 name = "solana-cost-model"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-feature-set",
  "ahash",
@@ -3005,7 +3021,7 @@ dependencies = [
 [[package]]
 name = "solana-curve25519"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "bytemuck",
  "bytemuck_derive",
@@ -3057,7 +3073,7 @@ dependencies = [
 [[package]]
 name = "solana-fee"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-feature-set",
  "solana-fee-structure",
@@ -3220,7 +3236,7 @@ dependencies = [
 [[package]]
 name = "solana-loader-v4-program"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "log",
  "solana-account",
@@ -3263,7 +3279,7 @@ dependencies = [
 [[package]]
 name = "solana-metrics"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "crossbeam-channel",
  "gethostname",
@@ -3322,7 +3338,7 @@ dependencies = [
 [[package]]
 name = "solana-poseidon"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "ark-bn254 0.4.0",
  "ark-bn254 0.5.0",
@@ -3372,7 +3388,7 @@ dependencies = [
 [[package]]
 name = "solana-program-runtime"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -3447,7 +3463,7 @@ dependencies = [
 [[package]]
 name = "solana-runtime-transaction"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-transaction-view",
  "log",
@@ -3654,7 +3670,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-callback"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "solana-account",
  "solana-clock",
@@ -3665,12 +3681,12 @@ dependencies = [
 [[package]]
 name = "solana-svm-feature-set"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 
 [[package]]
 name = "solana-svm-log-collector"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "log",
 ]
@@ -3678,12 +3694,12 @@ dependencies = [
 [[package]]
 name = "solana-svm-measure"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 
 [[package]]
 name = "solana-svm-timings"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "eager",
  "enum-iterator",
@@ -3693,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-transaction"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "solana-hash 3.1.0",
  "solana-message",
@@ -3706,7 +3722,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-type-overrides"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -3729,7 +3745,7 @@ dependencies = [
 [[package]]
 name = "solana-system-program"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "bincode",
  "log",
@@ -3839,7 +3855,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-context"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "bincode",
  "serde",
@@ -3891,7 +3907,7 @@ dependencies = [
 [[package]]
 name = "solana-vote-program"
 version = "4.0.0-alpha.0"
-source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#2a9b476fb439c79a45bce9c3f838e0eb4232d10f"
+source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#aa59c5ebc02a62d042e2870c7a855f1a31b097fb"
 dependencies = [
  "agave-feature-set",
  "bincode",
