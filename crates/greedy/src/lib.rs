@@ -265,8 +265,10 @@ impl GreedyScheduler {
                             return false;
                         }
 
-                        // TODO: Need to recover resolved keys & construct a sanitized transaction
-                        // view.
+                        // TODO:
+                        // - Remove sanitization/resolving.
+                        // - Create read/write lock iterators.
+
                         let tx = &self.state[id.key].shared;
                         // SAFETY:
                         // - We own the transaction and can safely dereference it.
@@ -608,7 +610,7 @@ mod tests {
         assert_eq!(message.flags & 1, pack_message_flags::CHECK);
 
         // Respond with OK.
-        harness.send_check_ok(worker_index, message);
+        harness.send_check_ok(worker_index, message, None);
         harness.poll_scheduler();
 
         // Assert - Scheduler does not schedule the valid TX as we are not leader.
@@ -641,7 +643,7 @@ mod tests {
         assert_eq!(message.flags & 1, pack_message_flags::CHECK);
 
         // Respond with OK.
-        harness.send_check_ok(worker_index, message);
+        harness.send_check_ok(worker_index, message, None);
         harness.poll_scheduler();
 
         // Assert - A single request (to execute the TX) is sent.
@@ -683,7 +685,7 @@ mod tests {
             ..MOCK_PROGRESS
         });
 
-        // Assert - Scheduler has scheduled tx1.
+        // Assert - Scheduler has scheduled both.
         harness.poll_scheduler();
         let batches = harness.drain_batches();
         let [(_, batch)] = &batches[..] else {
@@ -714,6 +716,63 @@ mod tests {
         harness.send_tx(&tx1);
         harness.poll_scheduler();
         harness.process_checks();
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Become the leader of a slot that is 50% done with a lot of remaining cost
+        // units.
+        harness.send_progress(ProgressMessage {
+            leader_state: IS_LEADER,
+            current_slot_progress: 50,
+            remaining_cost_units: 50_000_000,
+            ..MOCK_PROGRESS
+        });
+
+        // Assert - Scheduler has scheduled tx1.
+        harness.poll_scheduler();
+        let batches = harness.drain_batches();
+        let [(_, batch)] = &batches[..] else {
+            panic!();
+        };
+        let [ex0] = &batch[..] else {
+            panic!();
+        };
+        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+
+        // Assert - Scheduler has scheduled tx0.
+        harness.poll_scheduler();
+        let batches = harness.drain_batches();
+        let [(_, batch)] = &batches[..] else {
+            panic!();
+        };
+        let [ex1] = &batch[..] else {
+            panic!();
+        };
+        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+    }
+
+    #[test]
+    fn schedule_by_priority_conflicting_in_alt() {
+        let mut harness = Harness::setup();
+        let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
+
+        // Ingest a simple transfer (with low priority).
+        let payer0 = Keypair::new();
+        let tx0 = transfer_with_budget(&payer0, 25_000, 100);
+        harness.send_tx(&tx0);
+        harness.poll_scheduler();
+        let (worker, msg) = harness.drain_pack_to_workers()[0];
+        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Ingest a simple transfer (with high priority).
+        let payer1 = Keypair::new();
+        let tx1 = transfer_with_budget(&payer1, 25_000, 500);
+        harness.send_tx(&tx1);
+        harness.poll_scheduler();
+        let (worker, msg) = harness.drain_pack_to_workers()[0];
+        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
         harness.poll_scheduler();
         assert!(harness.drain_pack_to_workers().is_empty());
 
@@ -790,7 +849,7 @@ mod tests {
         fn process_checks(&mut self) {
             for (worker_index, message) in self.drain_pack_to_workers() {
                 assert_eq!(message.flags & 1, pack_message_flags::CHECK);
-                self.send_check_ok(worker_index, message);
+                self.send_check_ok(worker_index, message, None);
             }
         }
 
@@ -862,8 +921,35 @@ mod tests {
             self.session.tpu_to_pack.producer.commit();
         }
 
-        fn send_check_ok(&mut self, worker_index: usize, msg: PackToWorkerMessage) {
+        fn send_check_ok(
+            &mut self,
+            worker_index: usize,
+            msg: PackToWorkerMessage,
+            pubkeys: Option<Vec<Pubkey>>,
+        ) {
             assert_eq!(msg.batch.num_transactions, 1);
+
+            let resolved_pubkeys =
+                pubkeys.map_or(SharablePubkeys { offset: 0, num_pubkeys: 0 }, |keys| {
+                    assert!(!keys.is_empty());
+                    let pubkeys = self
+                        .allocator()
+                        .allocate(
+                            u32::try_from(std::mem::size_of::<Pubkey>() * keys.len()).unwrap(),
+                        )
+                        .unwrap();
+                    let offset = unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            keys.as_ptr(),
+                            pubkeys.as_ptr().cast(),
+                            keys.len(),
+                        );
+
+                        self.allocator().offset(pubkeys)
+                    };
+
+                    SharablePubkeys { offset, num_pubkeys: u32::try_from(keys.len()).unwrap() }
+                });
 
             let (mut response_ptr, responses) =
                 allocate_check_response_region(self.allocator(), 1).unwrap();
@@ -880,7 +966,7 @@ mod tests {
                     fee_payer_balance: u64::from(u32::MAX),
                     resolution_slot: self.slot,
                     min_alt_deactivation_slot: u64::MAX,
-                    resolved_pubkeys: SharablePubkeys { offset: 0, num_pubkeys: 0 },
+                    resolved_pubkeys,
                 };
             }
 
