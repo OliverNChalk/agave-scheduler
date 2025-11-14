@@ -108,6 +108,7 @@ impl GreedyScheduler {
 
         // Schedule if we're currently the leader.
         if is_leader {
+            println!("SCHEDULE");
             self.schedule_execute();
         }
 
@@ -298,11 +299,15 @@ impl GreedyScheduler {
         // TODO: Would be ideal for the scheduler protocol to tell us the max block
         // units.
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
-        let cost_used = self.progress.remaining_cost_units + u64::from(self.in_flight_cost);
+        let cost_used = MAX_BLOCK_UNITS_SIMD_0256
+            .saturating_sub(self.progress.remaining_cost_units)
+            + u64::from(self.in_flight_cost);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut self.workers[1..] {
+            println!("CHECK WORKER");
             if budget_remaining == 0 || self.checked.is_empty() {
-                continue;
+                println!("DONE; budget={budget_remaining}; checked={}", self.checked.len());
+                return;
             }
 
             let batch = Self::collect_batch(&self.allocator, || {
@@ -644,6 +649,7 @@ mod tests {
 
         // Assert - Scheduler has scheduled tx1.
         harness.poll_scheduler();
+        // TODO: Create helper to convert all messages to TransactionViews.
         let mut batches = harness.drain_pack_to_workers().into_iter().map(|(_, msg)| {
             assert_eq!(msg.batch.num_transactions, 1);
 
