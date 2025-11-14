@@ -15,7 +15,9 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::responses_region::CheckResponsesPtr;
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
+use agave_transaction_view::resolved_transaction_view::ResolvedTransactionView;
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
+use hashbrown::HashMap;
 use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
@@ -24,8 +26,9 @@ use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
 use solana_fee::FeeFeatures;
 use solana_fee_structure::FeeBudgetLimits;
+use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
-use solana_svm_transaction::svm_message::SVMStaticMessage;
+use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
 use solana_transaction::sanitized::MessageHash;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
@@ -53,6 +56,7 @@ pub struct GreedyScheduler {
     checked: MinMaxHeap<PriorityId>,
     state: SlotMap<TransactionStateKey, SharableTransactionRegion>,
     in_flight_cost: u32,
+    schedule_locks: HashMap<Pubkey, bool>,
 }
 
 impl GreedyScheduler {
@@ -86,6 +90,7 @@ impl GreedyScheduler {
             checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             state: SlotMap::with_capacity_and_key(STATE_CAPACITY),
             in_flight_cost: 0,
+            schedule_locks: HashMap::default(),
         }
     }
 
@@ -108,7 +113,6 @@ impl GreedyScheduler {
 
         // Schedule if we're currently the leader.
         if is_leader {
-            println!("SCHEDULE");
             self.schedule_execute();
         }
 
@@ -293,6 +297,13 @@ impl GreedyScheduler {
     }
 
     fn schedule_execute(&mut self) {
+        // TODO:
+        //
+        // - Track read/write locks for the current batch.
+        //   - Once we hit a conflict, send the batch off & return.
+        // - Use workers in a round robin fashion.
+        // - Do not build a batch if any worker has a non-empty queue.
+
         debug_assert_eq!(self.progress.leader_state, IS_LEADER);
         let budget_percentage =
             std::cmp::min(self.progress.current_slot_progress + BLOCK_FILL_CUTOFF, 100);
@@ -304,9 +315,7 @@ impl GreedyScheduler {
             + u64::from(self.in_flight_cost);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut self.workers[1..] {
-            println!("CHECK WORKER");
             if budget_remaining == 0 || self.checked.is_empty() {
-                println!("DONE; budget={budget_remaining}; checked={}", self.checked.len());
                 return;
             }
 
@@ -314,15 +323,45 @@ impl GreedyScheduler {
                 self.checked
                     .pop_max()
                     .filter(|id| {
-                        let exceeded = u64::from(id.cost) > budget_remaining;
-                        budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
-
-                        // Re-queue the transaction if we can't schedule it due to cost limits.
-                        if exceeded {
+                        // Check if we can fit the TX within our budget.
+                        if u64::from(id.cost) > budget_remaining {
                             self.checked.push(*id);
+
+                            return false;
                         }
 
-                        !exceeded
+                        // TODO: Need to recover resolved keys & construct a sanitized transaction
+                        // view.
+                        let tx = &self.state[id.key];
+                        // SAFETY:
+                        // - We own the transaction and can safely dereference it.
+                        let tx = unsafe {
+                            TransactionPtr::from_sharable_transaction_region(tx, &self.allocator)
+                        };
+                        let tx = TransactionView::try_new_sanitized(tx, true).unwrap();
+                        let tx = ResolvedTransactionView::try_new(
+                            tx,
+                            None,                                  // TODO
+                            &std::collections::HashSet::default(), // TODO
+                        )
+                        .unwrap();
+
+                        for (i, key) in tx.account_keys().iter().enumerate() {
+                            if match tx.is_writable(i) {
+                                true => self.schedule_locks.insert(*key, true).is_some(),
+                                false => self
+                                    .schedule_locks
+                                    .insert(*key, false)
+                                    .is_some_and(|writable| writable),
+                            } {
+                                todo!("Lock conflict");
+                            }
+                        }
+
+                        // Update the budget as we are scheduling this TX.
+                        budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
+
+                        true
                     })
                     .map(|id| {
                         self.in_flight_cost += id.cost;
@@ -619,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_by_priority() {
+    fn schedule_by_priority_non_conflicting() {
         let mut harness = Harness::setup();
 
         // Ingest a simple transfer (with low priority).
@@ -649,41 +688,66 @@ mod tests {
 
         // Assert - Scheduler has scheduled tx1.
         harness.poll_scheduler();
-        // TODO: Create helper to convert all messages to TransactionViews.
-        let mut batches = harness.drain_pack_to_workers().into_iter().map(|(_, msg)| {
-            assert_eq!(msg.batch.num_transactions, 1);
+        let batches = harness.drain_batches();
+        let [(_, batch)] = &batches[..] else {
+            panic!();
+        };
+        let [ex0, ex1] = &batch[..] else {
+            panic!();
+        };
+        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+    }
 
-            unsafe {
-                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                    &msg.batch,
-                    harness.allocator(),
-                )
-            }
+    #[test]
+    fn schedule_by_priority_conflicting() {
+        let mut harness = Harness::setup();
+
+        // Ingest a simple transfer (with low priority).
+        let tx0 = transfer_with_budget(25_000, 100);
+        harness.send_tx(&tx0);
+        harness.poll_scheduler();
+        harness.process_checks();
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Ingest a simple transfer (with high priority).
+        let tx1 = transfer_with_budget(25_000, 500);
+        harness.send_tx(&tx1);
+        harness.poll_scheduler();
+        harness.process_checks();
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Become the leader of a slot that is 50% done with a lot of remaining cost
+        // units.
+        harness.send_progress(ProgressMessage {
+            leader_state: IS_LEADER,
+            current_slot_progress: 50,
+            remaining_cost_units: 50_000_000,
+            ..MOCK_PROGRESS
         });
-        let batch = batches.next().unwrap();
-        assert!(batches.next().is_none());
-        assert_eq!(batch.len(), 1);
-        let (ex0, _) = batch.iter().next().unwrap();
-        let ex0 = TransactionView::try_new_unsanitized(ex0).unwrap();
+
+        // Assert - Scheduler has scheduled tx1.
+        harness.poll_scheduler();
+        let batches = harness.drain_batches();
+        let [(_, batch)] = &batches[..] else {
+            panic!();
+        };
+        let [ex0] = &batch[..] else {
+            panic!();
+        };
         assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
 
         // Assert - Scheduler has scheduled tx0.
         harness.poll_scheduler();
-        let mut batches = harness.drain_pack_to_workers().into_iter().map(|(_, msg)| {
-            assert_eq!(msg.batch.num_transactions, 1);
-
-            unsafe {
-                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                    &msg.batch,
-                    harness.allocator(),
-                )
-            }
-        });
-        let batch = batches.next().unwrap();
-        assert!(batches.next().is_none());
-        assert_eq!(batch.len(), 1);
-        let (ex1, _) = batch.iter().next().unwrap();
-        let ex1 = TransactionView::try_new_unsanitized(ex1).unwrap();
+        let batches = harness.drain_batches();
+        let [(_, batch)] = &batches[..] else {
+            panic!();
+        };
+        let [ex1] = &batch[..] else {
+            panic!();
+        };
         assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
     }
 
@@ -745,6 +809,28 @@ mod tests {
                     std::iter::from_fn(move || {
                         worker.pack_to_worker.try_read().map(|msg| (i, *msg))
                     })
+                })
+                .collect()
+        }
+
+        fn drain_batches(&mut self) -> Vec<(usize, Vec<TransactionView<true, TransactionPtr>>)> {
+            self.drain_pack_to_workers()
+                .into_iter()
+                .map(|(index, msg)| {
+                    let batch = unsafe {
+                        TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
+                            &msg.batch,
+                            self.allocator(),
+                        )
+                    };
+
+                    (
+                        index,
+                        batch
+                            .iter()
+                            .map(|(tx, _)| TransactionView::try_new_sanitized(tx, true).unwrap())
+                            .collect(),
+                    )
                 })
                 .collect()
         }
