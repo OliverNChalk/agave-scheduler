@@ -1349,6 +1349,7 @@ dependencies = [
  "solana-fee-structure",
  "solana-hash 3.1.0",
  "solana-keypair",
+ "solana-message",
  "solana-pubkey 3.0.0",
  "solana-runtime-transaction",
  "solana-svm-transaction",

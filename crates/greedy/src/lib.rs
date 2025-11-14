@@ -237,6 +237,7 @@ impl GreedyScheduler {
     // - Use workers in a round robin fashion.
     // - Do not build a batch if any worker has a non-empty queue.
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
+        println!("schedule");
         self.schedule_locks.clear();
 
         debug_assert_eq!(self.progress.leader_state, IS_LEADER);
@@ -250,6 +251,7 @@ impl GreedyScheduler {
             + u64::from(self.in_flight_cost);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut queues.workers[1..] {
+            println!("{budget_remaining}");
             if budget_remaining == 0 || self.checked.is_empty() {
                 return;
             }
@@ -268,15 +270,17 @@ impl GreedyScheduler {
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
                         let tx = &self.state[id.key];
+                        println!("{}", tx.view.signatures()[0]);
                         if tx
                             .write_locks()
-                            .any(|key| self.schedule_locks.insert(*key, true).is_none())
-                            && tx.read_locks().any(|key| {
+                            .any(|key| self.schedule_locks.insert(*key, true).is_some())
+                            || tx.read_locks().any(|key| {
                                 self.schedule_locks
                                     .insert(*key, false)
                                     .is_some_and(|writable| writable)
                             })
                         {
+                            println!("conflict");
                             self.checked.push(*id);
                             budget_remaining = 0;
 
@@ -571,7 +575,9 @@ mod tests {
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Pubkey, Signer};
-    use solana_transaction::Transaction;
+    use solana_message::{AddressLookupTableAccount, v0};
+    use solana_transaction::versioned::VersionedTransaction;
+    use solana_transaction::{AccountMeta, Instruction, Transaction, VersionedMessage};
 
     use super::*;
 
@@ -591,7 +597,9 @@ mod tests {
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.send_tx(&solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()));
+        harness.send_tx(
+            &solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()).into(),
+        );
 
         // Poll the greedy scheduler.
         harness.poll_scheduler();
@@ -624,7 +632,9 @@ mod tests {
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.send_tx(&solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()));
+        harness.send_tx(
+            &solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()).into(),
+        );
 
         // Poll the greedy scheduler.
         harness.poll_scheduler();
@@ -653,7 +663,7 @@ mod tests {
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
-        let tx0 = transfer_with_budget(&payer0, 25_000, 100);
+        let tx0 = noop_with_budget(&payer0, 25_000, 100);
         harness.send_tx(&tx0);
         harness.poll_scheduler();
         harness.process_checks();
@@ -662,7 +672,7 @@ mod tests {
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
-        let tx1 = transfer_with_budget(&payer1, 25_000, 500);
+        let tx1 = noop_with_budget(&payer1, 25_000, 500);
         harness.send_tx(&tx1);
         harness.poll_scheduler();
         harness.process_checks();
@@ -697,7 +707,7 @@ mod tests {
 
         // Ingest a simple transfer (with low priority).
         let payer = Keypair::new();
-        let tx0 = transfer_with_budget(&payer, 25_000, 100);
+        let tx0 = noop_with_budget(&payer, 25_000, 100);
         harness.send_tx(&tx0);
         harness.poll_scheduler();
         harness.process_checks();
@@ -705,7 +715,7 @@ mod tests {
         assert!(harness.drain_pack_to_workers().is_empty());
 
         // Ingest a simple transfer (with high priority).
-        let tx1 = transfer_with_budget(&payer, 25_000, 500);
+        let tx1 = noop_with_budget(&payer, 25_000, 500);
         harness.send_tx(&tx1);
         harness.poll_scheduler();
         harness.process_checks();
@@ -745,13 +755,14 @@ mod tests {
     }
 
     #[test]
-    fn schedule_by_priority_alt_conflicting() {
+    fn schedule_by_priority_alt_non_conflicting() {
         let mut harness = Harness::setup();
         let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
-        let tx0 = transfer_with_budget(&payer0, 25_000, 100);
+        let read_lock = Pubkey::new_unique();
+        let tx0 = noop_with_alt_locks(&payer0, &[], &[read_lock], 25_000, 100);
         harness.send_tx(&tx0);
         harness.poll_scheduler();
         let (worker, msg) = harness.drain_pack_to_workers()[0];
@@ -761,7 +772,55 @@ mod tests {
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
-        let tx1 = transfer_with_budget(&payer1, 25_000, 500);
+        let tx1 = noop_with_alt_locks(&payer1, &[], &[read_lock], 25_000, 500);
+        harness.send_tx(&tx1);
+        harness.poll_scheduler();
+        let (worker, msg) = harness.drain_pack_to_workers()[0];
+        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Become the leader of a slot that is 50% done with a lot of remaining cost
+        // units.
+        harness.send_progress(ProgressMessage {
+            leader_state: IS_LEADER,
+            current_slot_progress: 50,
+            remaining_cost_units: 50_000_000,
+            ..MOCK_PROGRESS
+        });
+
+        // Assert - Scheduler has scheduled both.
+        harness.poll_scheduler();
+        let batches = harness.drain_batches();
+        let [(_, batch)] = &batches[..] else {
+            panic!();
+        };
+        let [ex0, ex1] = &batch[..] else {
+            panic!();
+        };
+        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+    }
+
+    #[test]
+    fn schedule_by_priority_alt_conflicting() {
+        let mut harness = Harness::setup();
+        let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
+
+        // Ingest a simple transfer (with low priority).
+        let payer0 = Keypair::new();
+        let write_lock = Pubkey::new_unique();
+        let tx0 = noop_with_alt_locks(&payer0, &[write_lock], &[], 25_000, 100);
+        harness.send_tx(&tx0);
+        harness.poll_scheduler();
+        let (worker, msg) = harness.drain_pack_to_workers()[0];
+        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Ingest a simple transfer (with high priority).
+        let payer1 = Keypair::new();
+        let tx1 = noop_with_alt_locks(&payer1, &[write_lock], &[], 25_000, 500);
         harness.send_tx(&tx1);
         harness.poll_scheduler();
         let (worker, msg) = harness.drain_pack_to_workers()[0];
@@ -891,7 +950,7 @@ mod tests {
             self.session.progress_tracker.commit();
         }
 
-        fn send_tx(&mut self, tx: &Transaction) {
+        fn send_tx(&mut self, tx: &VersionedTransaction) {
             // Serialize & copy the pointer to shared memory.
             let mut packet = bincode::serialize(&tx).unwrap();
             let packet_len = packet.len().try_into().unwrap();
@@ -976,7 +1035,7 @@ mod tests {
         }
     }
 
-    fn transfer_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> Transaction {
+    fn noop_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> VersionedTransaction {
         Transaction::new_signed_with_payer(
             &[
                 ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
@@ -986,5 +1045,48 @@ mod tests {
             &[&payer],
             Hash::new_from_array([1; 32]),
         )
+        .into()
+    }
+
+    fn noop_with_alt_locks(
+        payer: &Keypair,
+        write: &[Pubkey],
+        read: &[Pubkey],
+        cu_limit: u32,
+        cu_price: u64,
+    ) -> VersionedTransaction {
+        VersionedTransaction::try_new(
+            VersionedMessage::V0(
+                v0::Message::try_compile(
+                    &payer.pubkey(),
+                    &[
+                        ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
+                        ComputeBudgetInstruction::set_compute_unit_price(cu_price),
+                        Instruction {
+                            program_id: Pubkey::default(),
+                            accounts: write
+                                .iter()
+                                .map(|key| (*key, true))
+                                .chain(read.iter().map(|key| (*key, false)))
+                                .map(|(key, is_writable)| AccountMeta {
+                                    pubkey: key,
+                                    is_signer: false,
+                                    is_writable,
+                                })
+                                .collect(),
+                            data: vec![],
+                        },
+                    ],
+                    &[AddressLookupTableAccount {
+                        key: Pubkey::new_unique(),
+                        addresses: [write, read].concat(),
+                    }],
+                    Hash::new_from_array([1; 32]),
+                )
+                .unwrap(),
+            ),
+            &[payer],
+        )
+        .unwrap()
     }
 }

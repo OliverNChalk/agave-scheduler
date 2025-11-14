@@ -81,7 +81,10 @@ impl TransactionState {
             .chain(self.resolved.iter().flat_map(|keys| keys.as_slice().iter()))
             .enumerate()
             .filter(|(i, _)| self.is_writable(*i as u8))
-            .map(|(_, key)| key)
+            .map(|(_, key)| {
+                println!("WRITE: {key}");
+                key
+            })
     }
 
     pub(crate) fn read_locks(&self) -> impl Iterator<Item = &Pubkey> {
@@ -91,7 +94,10 @@ impl TransactionState {
             .chain(self.resolved.iter().flat_map(|keys| keys.as_slice().iter()))
             .enumerate()
             .filter(|(i, _)| !self.is_writable(*i as u8))
-            .map(|(_, key)| key)
+            .map(|(_, key)| {
+                println!("READ: {key}");
+                key
+            })
     }
 
     fn is_writable(&self, index: u8) -> bool {
