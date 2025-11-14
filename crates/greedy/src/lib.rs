@@ -528,16 +528,27 @@ mod tests {
 
     use agave_scheduler_bindings::worker_message_types::CheckResponse;
     use agave_scheduler_bindings::{
-        SharablePubkeys, SharableTransactionRegion, WorkerToPackMessage, processed_codes,
+        IS_NOT_LEADER, SharablePubkeys, SharableTransactionRegion, WorkerToPackMessage,
+        processed_codes,
     };
     use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
     use agave_scheduling_utils::responses_region::allocate_check_response_region;
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
-    use solana_keypair::{Keypair, Pubkey};
+    use solana_keypair::{Keypair, Pubkey, Signer};
     use solana_transaction::Transaction;
 
     use super::*;
+
+    const MOCK_PROGRESS: ProgressMessage = ProgressMessage {
+        leader_state: IS_NOT_LEADER,
+        current_slot: 10,
+        next_leader_slot: 11,
+        leader_range_end: 11,
+        remaining_cost_units: 10_000_000,
+        current_slot_progress: 25,
+    };
 
     #[test]
     fn check_no_schedule() {
@@ -574,14 +585,7 @@ mod tests {
         let mut harness = Harness::setup();
 
         // Notify the scheduler that node is now leader.
-        harness.send_progress(ProgressMessage {
-            leader_state: IS_LEADER,
-            current_slot: 10,
-            next_leader_slot: 11,
-            leader_range_end: 11,
-            remaining_cost_units: 10_000_000,
-            current_slot_progress: 25,
-        });
+        harness.send_progress(ProgressMessage { leader_state: IS_LEADER, ..MOCK_PROGRESS });
 
         // Ingest a simple transfer.
         let from = Keypair::new();
@@ -607,6 +611,74 @@ mod tests {
         let (_, message) = worker_requests.remove(0);
         assert_eq!(message.flags & 1, pack_message_flags::EXECUTE);
         assert_eq!(message.batch.num_transactions, 1);
+    }
+
+    #[test]
+    fn schedule_by_priority() {
+        let mut harness = Harness::setup();
+
+        // Ingest a simple transfer (with low priority).
+        let tx0 = transfer_with_budget(25_000, 100);
+        harness.send_tx(&tx0);
+        harness.poll_scheduler();
+        harness.process_checks();
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Ingest a simple transfer (with high priority).
+        let tx1 = transfer_with_budget(25_000, 500);
+        harness.send_tx(&tx1);
+        harness.poll_scheduler();
+        harness.process_checks();
+        harness.poll_scheduler();
+        assert!(harness.drain_pack_to_workers().is_empty());
+
+        // Become the leader of a slot that is 50% done with a lot of remaining cost
+        // units.
+        harness.send_progress(ProgressMessage {
+            leader_state: IS_LEADER,
+            current_slot_progress: 50,
+            remaining_cost_units: 50_000_000,
+            ..MOCK_PROGRESS
+        });
+
+        // Assert - Scheduler has scheduled tx1.
+        harness.poll_scheduler();
+        let mut batches = harness.drain_pack_to_workers().into_iter().map(|(_, msg)| {
+            assert_eq!(msg.batch.num_transactions, 1);
+
+            unsafe {
+                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
+                    &msg.batch,
+                    harness.allocator(),
+                )
+            }
+        });
+        let batch = batches.next().unwrap();
+        assert!(batches.next().is_none());
+        assert_eq!(batch.len(), 1);
+        let (ex0, _) = batch.iter().next().unwrap();
+        let ex0 = TransactionView::try_new_unsanitized(ex0).unwrap();
+        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+
+        // Assert - Scheduler has scheduled tx0.
+        harness.poll_scheduler();
+        let mut batches = harness.drain_pack_to_workers().into_iter().map(|(_, msg)| {
+            assert_eq!(msg.batch.num_transactions, 1);
+
+            unsafe {
+                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
+                    &msg.batch,
+                    harness.allocator(),
+                )
+            }
+        });
+        let batch = batches.next().unwrap();
+        assert!(batches.next().is_none());
+        assert_eq!(batch.len(), 1);
+        let (ex1, _) = batch.iter().next().unwrap();
+        let ex1 = TransactionView::try_new_unsanitized(ex1).unwrap();
+        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
     }
 
     struct Harness {
@@ -647,6 +719,13 @@ mod tests {
 
         fn poll_scheduler(&mut self) {
             self.scheduler.poll();
+        }
+
+        fn process_checks(&mut self) {
+            for (worker_index, message) in self.drain_pack_to_workers() {
+                assert_eq!(message.flags & 1, pack_message_flags::CHECK);
+                self.send_check_ok(worker_index, message);
+            }
         }
 
         fn drain_pack_to_workers(&mut self) -> Vec<(usize, PackToWorkerMessage)> {
@@ -728,5 +807,19 @@ mod tests {
                 .unwrap();
             queue.commit();
         }
+    }
+
+    fn transfer_with_budget(cu_limit: u32, cu_price: u64) -> Transaction {
+        let payer = Keypair::new();
+
+        Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
+                ComputeBudgetInstruction::set_compute_unit_price(cu_price),
+            ],
+            Some(&payer.pubkey()),
+            &[&payer],
+            Hash::new_from_array([1; 32]),
+        )
     }
 }

@@ -1336,6 +1336,7 @@ dependencies = [
  "shaq",
  "slotmap",
  "solana-compute-budget-instruction",
+ "solana-compute-budget-interface",
  "solana-cost-model",
  "solana-fee",
  "solana-fee-structure",
