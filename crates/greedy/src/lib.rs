@@ -600,7 +600,7 @@ mod tests {
         current_slot: 10,
         next_leader_slot: 11,
         leader_range_end: 11,
-        remaining_cost_units: 10_000_000,
+        remaining_cost_units: 50_000_000,
         current_slot_progress: 25,
     };
 
@@ -626,7 +626,7 @@ mod tests {
         harness.send_check_ok(worker_index, message);
         harness.poll_scheduler();
 
-        // Assert - Scheduler does not schedule the valid TX.
+        // Assert - Scheduler does not schedule the valid TX as we are not leader.
         assert!(harness.session.workers.iter_mut().all(|worker| {
             worker.pack_to_worker.sync();
 
