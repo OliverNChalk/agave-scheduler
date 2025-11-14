@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::{Index, IndexMut};
 
 use agave_scheduler_bindings::{SharablePubkeys, SharableTransactionRegion};
 use rts_alloc::Allocator;
@@ -40,11 +40,17 @@ impl TransactionMap {
     }
 }
 
-impl Deref for TransactionMap {
-    type Target = SlotMap<TransactionStateKey, TransactionState>;
+impl Index<TransactionStateKey> for TransactionMap {
+    type Output = TransactionState;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    fn index(&self, index: TransactionStateKey) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl IndexMut<TransactionStateKey> for TransactionMap {
+    fn index_mut(&mut self, index: TransactionStateKey) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }
 

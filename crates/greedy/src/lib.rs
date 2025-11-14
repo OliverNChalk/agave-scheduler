@@ -386,6 +386,9 @@ impl GreedyScheduler {
             // Insert the new transaction (yes this may be lower priority then what
             // we just evicted but that's fine).
             self.checked.push(id);
+
+            // Update the state to include the resolved pubkeys.
+            self.state[id.key].resolved = Some(rep.resolved_pubkeys);
         }
 
         // Free both containers.
