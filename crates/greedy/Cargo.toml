@@ -33,6 +33,6 @@ bincode.workspace = true
 solana-compute-budget-interface.workspace = true
 solana-hash.workspace = true
 solana-keypair.workspace = true
-solana-message = "3.0.1"
+solana-message.workspace = true
 solana-system-transaction.workspace = true
 solana-transaction = { workspace = true, features = ["bincode", "serde"] }

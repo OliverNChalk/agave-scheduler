@@ -52,6 +52,7 @@ solana-fee = { git = "https://github.com/OliverNChalk/agave", branch = "temp/gre
 solana-fee-structure = "3.0.0"
 solana-hash = "3.0.1"
 solana-keypair = "3.0.1"
+solana-message = "3.0.1"
 solana-pubkey = "3.0.0"
 solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-svm-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
