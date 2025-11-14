@@ -20,6 +20,7 @@ use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
+use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
 use solana_fee::FeeFeatures;
 use solana_fee_structure::FeeBudgetLimits;
@@ -37,6 +38,9 @@ const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE
 const_assert!(TX_BATCH_SIZE < 4096);
 const TX_BATCH_META_OFFSET: usize = TX_REGION_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
 
+/// How many percentage points before the end should we aim to fill the block.
+const BLOCK_FILL_CUTOFF: u8 = 20;
+
 pub struct GreedyScheduler {
     allocator: Allocator,
     tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
@@ -48,6 +52,7 @@ pub struct GreedyScheduler {
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
     state: SlotMap<TransactionStateKey, SharableTransactionRegion>,
+    in_flight_cost: u32,
 }
 
 impl GreedyScheduler {
@@ -80,6 +85,7 @@ impl GreedyScheduler {
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             state: SlotMap::with_capacity_and_key(STATE_CAPACITY),
+            in_flight_cost: 0,
         }
     }
 
@@ -182,11 +188,32 @@ impl GreedyScheduler {
                         // SAFETY:
                         // - Trust Agave to have allocated the batch/responses properly & told us
                         //   the correct size.
+                        // - Don't duplicate wrapper so we cannot double free.
+                        let batch: TransactionPtrBatch<PriorityId> = unsafe {
+                            TransactionPtrBatch::from_sharable_transaction_batch_region(
+                                &msg.batch,
+                                &self.allocator,
+                            )
+                        };
+
+                        // Remove in-flight costs and free all transactions.
+                        for (tx, id) in batch.iter() {
+                            self.in_flight_cost -= id.cost;
+
+                            // SAFETY:
+                            // - Trust Agave not to have already freed this transaction as we are
+                            //   the owner.
+                            unsafe { tx.free(&self.allocator) };
+                        }
+
+                        // Free the containers.
+                        batch.free();
+                        // SAFETY:
+                        // - Trust Agave to have allocated these responses properly.
                         unsafe {
-                            self.allocator.free_offset(msg.batch.transactions_offset);
                             self.allocator
                                 .free_offset(msg.responses.transaction_responses_offset);
-                        };
+                        }
                     }
                     _ => panic!(),
                 }
@@ -221,9 +248,9 @@ impl GreedyScheduler {
             let msg = self.tpu_to_pack.try_read().unwrap();
 
             match Self::calculate_priority(&self.runtime, &self.allocator, msg) {
-                Some(priority) => {
+                Some((priority, cost)) => {
                     let key = self.state.insert(msg.transaction);
-                    self.unchecked.push(PriorityId { priority, key });
+                    self.unchecked.push(PriorityId { priority, cost, key });
                 }
                 // SAFETY:
                 // - Trust Agave to have correctly allocated & trenferred ownership of this
@@ -265,18 +292,43 @@ impl GreedyScheduler {
     }
 
     fn schedule_execute(&mut self) {
+        debug_assert_eq!(self.progress.leader_state, IS_LEADER);
+        let budget_percentage =
+            std::cmp::min(self.progress.current_slot_progress + BLOCK_FILL_CUTOFF, 100);
+        // TODO: Would be ideal for the scheduler protocol to tell us the max block
+        // units.
+        let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
+        let cost_used = self.progress.remaining_cost_units + u64::from(self.in_flight_cost);
+        let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut self.workers[1..] {
-            worker.pack_to_worker.sync();
-
-            if self.checked.is_empty() {
+            if budget_remaining == 0 || self.checked.is_empty() {
                 continue;
             }
 
             let batch = Self::collect_batch(&self.allocator, || {
-                self.checked.pop_max().map(|id| (id, self.state[id.key]))
+                self.checked
+                    .pop_max()
+                    .filter(|id| {
+                        let exceeded = u64::from(id.cost) > budget_remaining;
+                        budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
+
+                        // Re-queue the transaction if we can't schedule it due to cost limits.
+                        if exceeded {
+                            self.checked.push(*id);
+                        }
+
+                        !exceeded
+                    })
+                    .map(|id| {
+                        self.in_flight_cost += id.cost;
+
+                        (id, self.state[id.key])
+                    })
             });
 
             worker.pack_to_worker.sync();
+            // TODO: Figure out back pressure with workers to ensure they are all keeping
+            // up.
             worker
                 .pack_to_worker
                 .try_write(PackToWorkerMessage {
@@ -380,7 +432,7 @@ impl GreedyScheduler {
         runtime: &RuntimeState,
         allocator: &Allocator,
         msg: &TpuToPackMessage,
-    ) -> Option<u64> {
+    ) -> Option<(u64, u32)> {
         let tx = SanitizedTransactionView::try_new_sanitized(
             // SAFETY:
             // - Trust Agave to have allocated the shared transactin region correctly.
@@ -425,11 +477,13 @@ impl GreedyScheduler {
         let reward = base_fee.saturating_add(fee_details.prioritization_fee());
 
         // Compute priority.
-        Some(
+        Some((
             reward
                 .saturating_mul(1_000_000)
                 .saturating_div(cost.saturating_add(1)),
-        )
+            // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
+            cost.try_into().unwrap(),
+        ))
     }
 }
 
@@ -444,6 +498,7 @@ struct RuntimeState {
 #[repr(C)]
 struct PriorityId {
     priority: u64,
+    cost: u32,
     key: TransactionStateKey,
 }
 
@@ -457,6 +512,7 @@ impl Ord for PriorityId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.priority
             .cmp(&other.priority)
+            .then_with(|| self.cost.cmp(&other.cost))
             .then_with(|| self.key.cmp(&other.key))
     }
 }
