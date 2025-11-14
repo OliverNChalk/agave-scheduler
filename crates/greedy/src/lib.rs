@@ -296,13 +296,14 @@ impl GreedyScheduler {
         worker.pack_to_worker.commit();
     }
 
+    // TODO:
+    //
+    // - Track read/write locks for the current batch.
+    //   - Once we hit a conflict, send the batch off & return.
+    // - Use workers in a round robin fashion.
+    // - Do not build a batch if any worker has a non-empty queue.
     fn schedule_execute(&mut self) {
-        // TODO:
-        //
-        // - Track read/write locks for the current batch.
-        //   - Once we hit a conflict, send the batch off & return.
-        // - Use workers in a round robin fashion.
-        // - Do not build a batch if any worker has a non-empty queue.
+        self.schedule_locks.clear();
 
         debug_assert_eq!(self.progress.leader_state, IS_LEADER);
         let budget_percentage =
@@ -346,6 +347,7 @@ impl GreedyScheduler {
                         )
                         .unwrap();
 
+                        // Check if we can get the necessary locks for this transaction.
                         for (i, key) in tx.account_keys().iter().enumerate() {
                             if match tx.is_writable(i) {
                                 true => self.schedule_locks.insert(*key, true).is_some(),
@@ -354,7 +356,10 @@ impl GreedyScheduler {
                                     .insert(*key, false)
                                     .is_some_and(|writable| writable),
                             } {
-                                todo!("Lock conflict");
+                                self.checked.push(*id);
+                                budget_remaining = 0;
+
+                                return false;
                             }
                         }
 
@@ -369,6 +374,11 @@ impl GreedyScheduler {
                         (id, self.state[id.key])
                     })
             });
+
+            // If we failed to schedule anything, don't send the batch.
+            if batch.num_transactions == 0 {
+                return;
+            }
 
             worker.pack_to_worker.sync();
             // TODO: Figure out back pressure with workers to ensure they are all keeping
@@ -662,7 +672,8 @@ mod tests {
         let mut harness = Harness::setup();
 
         // Ingest a simple transfer (with low priority).
-        let tx0 = transfer_with_budget(25_000, 100);
+        let payer0 = Keypair::new();
+        let tx0 = transfer_with_budget(&payer0, 25_000, 100);
         harness.send_tx(&tx0);
         harness.poll_scheduler();
         harness.process_checks();
@@ -670,7 +681,8 @@ mod tests {
         assert!(harness.drain_pack_to_workers().is_empty());
 
         // Ingest a simple transfer (with high priority).
-        let tx1 = transfer_with_budget(25_000, 500);
+        let payer1 = Keypair::new();
+        let tx1 = transfer_with_budget(&payer1, 25_000, 500);
         harness.send_tx(&tx1);
         harness.poll_scheduler();
         harness.process_checks();
@@ -704,7 +716,8 @@ mod tests {
         let mut harness = Harness::setup();
 
         // Ingest a simple transfer (with low priority).
-        let tx0 = transfer_with_budget(25_000, 100);
+        let payer = Keypair::new();
+        let tx0 = transfer_with_budget(&payer, 25_000, 100);
         harness.send_tx(&tx0);
         harness.poll_scheduler();
         harness.process_checks();
@@ -712,7 +725,7 @@ mod tests {
         assert!(harness.drain_pack_to_workers().is_empty());
 
         // Ingest a simple transfer (with high priority).
-        let tx1 = transfer_with_budget(25_000, 500);
+        let tx1 = transfer_with_budget(&payer, 25_000, 500);
         harness.send_tx(&tx1);
         harness.poll_scheduler();
         harness.process_checks();
@@ -901,9 +914,7 @@ mod tests {
         }
     }
 
-    fn transfer_with_budget(cu_limit: u32, cu_price: u64) -> Transaction {
-        let payer = Keypair::new();
-
+    fn transfer_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> Transaction {
         Transaction::new_signed_with_payer(
             &[
                 ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
