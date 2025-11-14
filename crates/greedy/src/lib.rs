@@ -378,9 +378,11 @@ impl GreedyScheduler {
             // SAFETY
             // - Trust Agave to have allocated the pubkeys properly & transferred ownership
             //   to us.
-            self.state[id.key].resolved = Some(unsafe {
-                PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
-            });
+            if rep.resolved_pubkeys.num_pubkeys > 0 {
+                self.state[id.key].resolved = Some(unsafe {
+                    PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
+                });
+            }
         }
 
         // Free both containers.
@@ -646,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_by_priority_non_conflicting() {
+    fn schedule_by_priority_static_non_conflicting() {
         let mut harness = Harness::setup();
 
         // Ingest a simple transfer (with low priority).
@@ -690,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_by_priority_conflicting() {
+    fn schedule_by_priority_static_conflicting() {
         let mut harness = Harness::setup();
 
         // Ingest a simple transfer (with low priority).
@@ -743,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_by_priority_conflicting_in_alt() {
+    fn schedule_by_priority_alt_conflicting() {
         let mut harness = Harness::setup();
         let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
 

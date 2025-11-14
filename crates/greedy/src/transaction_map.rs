@@ -78,7 +78,7 @@ impl TransactionState {
         self.view
             .static_account_keys()
             .iter()
-            .chain(self.resolved.as_ref().unwrap().as_slice().iter())
+            .chain(self.resolved.iter().flat_map(|keys| keys.as_slice().iter()))
             .enumerate()
             .filter(|(i, _)| self.is_writable(*i as u8))
             .map(|(_, key)| key)
@@ -88,7 +88,7 @@ impl TransactionState {
         self.view
             .static_account_keys()
             .iter()
-            .chain(self.resolved.as_ref().unwrap().as_slice().iter())
+            .chain(self.resolved.iter().flat_map(|keys| keys.as_slice().iter()))
             .enumerate()
             .filter(|(i, _)| !self.is_writable(*i as u8))
             .map(|(_, key)| key)
