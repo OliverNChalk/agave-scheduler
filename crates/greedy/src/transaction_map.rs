@@ -1,6 +1,9 @@
 use std::ops::{Index, IndexMut};
 
 use agave_scheduler_bindings::{SharablePubkeys, SharableTransactionRegion};
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
+use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::transaction_view::TransactionView;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_pubkey::Pubkey;
@@ -62,19 +65,32 @@ slotmap::new_key_type! {
 #[derive(Debug)]
 pub(crate) struct TransactionState {
     pub(crate) shared: SharableTransactionRegion,
-    pub(crate) resolved: Option<SharablePubkeys>,
+    pub(crate) view: TransactionView<true, TransactionPtr>,
+    pub(crate) resolved: Option<PubkeysPtr>,
 }
 
 impl TransactionState {
-    pub(crate) fn write_locks(&self) -> impl Iterator<Item = Pubkey> {
-        todo!();
-
-        std::iter::empty()
+    pub(crate) fn write_locks(&self) -> impl Iterator<Item = &Pubkey> {
+        self.view
+            .static_account_keys()
+            .iter()
+            .chain(self.resolved.as_ref().unwrap().as_slice().iter())
+            .enumerate()
+            .filter(|(i, _)| self.is_writable(*i))
+            .map(|(_, key)| key)
     }
 
-    pub(crate) fn read_locks(&self) -> impl Iterator<Item = Pubkey> {
-        todo!();
+    pub(crate) fn read_locks(&self) -> impl Iterator<Item = &Pubkey> {
+        self.view
+            .static_account_keys()
+            .iter()
+            .chain(self.resolved.as_ref().unwrap().as_slice().iter())
+            .enumerate()
+            .filter(|(i, _)| !self.is_writable(*i))
+            .map(|(_, key)| key)
+    }
 
-        std::iter::empty()
+    fn is_writable(&self, index: usize) -> bool {
+        true
     }
 }
