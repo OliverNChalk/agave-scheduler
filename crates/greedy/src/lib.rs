@@ -17,7 +17,6 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::responses_region::CheckResponsesPtr;
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
-use agave_transaction_view::resolved_transaction_view::ResolvedTransactionView;
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
 use hashbrown::HashMap;
 use min_max_heap::MinMaxHeap;
@@ -29,7 +28,7 @@ use solana_fee::FeeFeatures;
 use solana_fee_structure::FeeBudgetLimits;
 use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
-use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
+use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
 use crate::transaction_map::{TransactionMap, TransactionStateKey};
@@ -265,38 +264,22 @@ impl GreedyScheduler {
                             return false;
                         }
 
-                        // TODO:
-                        // - Remove sanitization/resolving.
-                        // - Create read/write lock iterators.
+                        // Check if this transaction's read/write locks conflict with any
+                        // pre-existing read/write locks.
+                        let tx = &self.state[id.key];
+                        if tx
+                            .write_locks()
+                            .any(|key| self.schedule_locks.insert(key, true).is_none())
+                            && tx.read_locks().any(|key| {
+                                self.schedule_locks
+                                    .insert(key, false)
+                                    .is_some_and(|writable| writable)
+                            })
+                        {
+                            self.checked.push(*id);
+                            budget_remaining = 0;
 
-                        let tx = &self.state[id.key].shared;
-                        // SAFETY:
-                        // - We own the transaction and can safely dereference it.
-                        let tx = unsafe {
-                            TransactionPtr::from_sharable_transaction_region(tx, &self.allocator)
-                        };
-                        let tx = TransactionView::try_new_sanitized(tx, true).unwrap();
-                        let tx = ResolvedTransactionView::try_new(
-                            tx,
-                            None,                                  // TODO
-                            &std::collections::HashSet::default(), // TODO
-                        )
-                        .unwrap();
-
-                        // Check if we can get the necessary locks for this transaction.
-                        for (i, key) in tx.account_keys().iter().enumerate() {
-                            if match tx.is_writable(i) {
-                                true => self.schedule_locks.insert(*key, true).is_some(),
-                                false => self
-                                    .schedule_locks
-                                    .insert(*key, false)
-                                    .is_some_and(|writable| writable),
-                            } {
-                                self.checked.push(*id);
-                                budget_remaining = 0;
-
-                                return false;
-                            }
+                            return false;
                         }
 
                         // Update the budget as we are scheduling this TX.

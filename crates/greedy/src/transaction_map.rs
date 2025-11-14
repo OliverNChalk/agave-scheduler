@@ -3,6 +3,7 @@ use std::ops::{Index, IndexMut};
 use agave_scheduler_bindings::{SharablePubkeys, SharableTransactionRegion};
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
+use solana_pubkey::Pubkey;
 
 #[derive(Debug, Default)]
 pub(crate) struct TransactionMap(SlotMap<TransactionStateKey, TransactionState>);
@@ -62,4 +63,18 @@ slotmap::new_key_type! {
 pub(crate) struct TransactionState {
     pub(crate) shared: SharableTransactionRegion,
     pub(crate) resolved: Option<SharablePubkeys>,
+}
+
+impl TransactionState {
+    pub(crate) fn write_locks(&self) -> impl Iterator<Item = Pubkey> {
+        todo!();
+
+        std::iter::empty()
+    }
+
+    pub(crate) fn read_locks(&self) -> impl Iterator<Item = Pubkey> {
+        todo!();
+
+        std::iter::empty()
+    }
 }
