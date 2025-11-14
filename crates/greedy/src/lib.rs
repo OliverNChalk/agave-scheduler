@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate static_assertions;
 
+mod transaction_map;
+
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
@@ -20,7 +22,6 @@ use agave_transaction_view::transaction_view::{SanitizedTransactionView, Transac
 use hashbrown::HashMap;
 use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
-use slotmap::SlotMap;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
@@ -30,6 +31,8 @@ use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::{SVMMessage, SVMStaticMessage};
 use solana_transaction::sanitized::MessageHash;
+
+use crate::transaction_map::{TransactionMap, TransactionStateKey};
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
@@ -54,7 +57,7 @@ pub struct GreedyScheduler {
     runtime: RuntimeState,
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
-    state: SlotMap<TransactionStateKey, SharableTransactionRegion>,
+    state: TransactionMap,
     in_flight_cost: u32,
     schedule_locks: HashMap<Pubkey, bool>,
 }
@@ -88,7 +91,7 @@ impl GreedyScheduler {
             },
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-            state: SlotMap::with_capacity_and_key(STATE_CAPACITY),
+            state: TransactionMap::with_capacity(STATE_CAPACITY),
             in_flight_cost: 0,
             schedule_locks: HashMap::default(),
         }
@@ -173,11 +176,10 @@ impl GreedyScheduler {
                             // Evict lowest priority if at capacity.
                             if self.checked.len() == CHECKED_CAPACITY {
                                 let evicted = self.checked.pop_min().unwrap();
-                                let tx = self.state.remove(evicted.key).unwrap();
                                 // SAFETY
-                                // - We own this transaction and do not duplicate it so it will not
-                                //   get double freed.
-                                unsafe { self.allocator.free_offset(tx.offset) };
+                                // - We have not previously freed the underlying transaction/pubkey
+                                //   objects.
+                                unsafe { self.state.remove(&self.allocator, evicted.key) };
                             }
 
                             // Insert the new transaction (yes this may be lower priority then what
@@ -236,15 +238,10 @@ impl GreedyScheduler {
         // `additional` will parse correctly & thus have a priority.
         for _ in 0..shortfall {
             let id = self.unchecked.pop_min().unwrap();
-            let tx = self.state.remove(id.key).unwrap();
-
             // SAFETY:
             // - Trust Agave to behave correctly and not free these transactions.
-            // - We have not previously freed this transaction as each region has a single
-            //   unique entry in `self.state`.
-            unsafe {
-                self.allocator.free_offset(tx.offset);
-            }
+            // - We have not previously freed this transaction.
+            unsafe { self.state.remove(&self.allocator, id.key) };
         }
 
         // TODO: Need to dedupe already seen transactions.
@@ -287,7 +284,9 @@ impl GreedyScheduler {
                         | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
                     max_working_slot: self.progress.current_slot + 1,
                     batch: Self::collect_batch(&self.allocator, || {
-                        self.unchecked.pop_max().map(|id| (id, self.state[id.key]))
+                        self.unchecked
+                            .pop_max()
+                            .map(|id| (id, self.state[id.key].shared))
                     }),
                 })
                 .unwrap();
@@ -333,7 +332,7 @@ impl GreedyScheduler {
 
                         // TODO: Need to recover resolved keys & construct a sanitized transaction
                         // view.
-                        let tx = &self.state[id.key];
+                        let tx = &self.state[id.key].shared;
                         // SAFETY:
                         // - We own the transaction and can safely dereference it.
                         let tx = unsafe {
@@ -371,7 +370,7 @@ impl GreedyScheduler {
                     .map(|id| {
                         self.in_flight_cost += id.cost;
 
-                        (id, self.state[id.key])
+                        (id, self.state[id.key].shared)
                     })
             });
 
@@ -428,6 +427,8 @@ impl GreedyScheduler {
                     rep.fee_payer_balance_flags,
                     fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED
                 );
+
+                // TODO: Store the sharable pubkeys with the payer state.
 
                 // SAFETY
                 // - TX was validly constructed as our code controls this.
@@ -569,10 +570,6 @@ impl Ord for PriorityId {
             .then_with(|| self.cost.cmp(&other.cost))
             .then_with(|| self.key.cmp(&other.key))
     }
-}
-
-slotmap::new_key_type! {
-    struct TransactionStateKey;
 }
 
 #[cfg(test)]
