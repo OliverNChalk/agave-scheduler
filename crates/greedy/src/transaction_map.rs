@@ -1,6 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use agave_scheduler_bindings::{SharablePubkeys, SharableTransactionRegion};
+use agave_scheduler_bindings::SharableTransactionRegion;
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::TransactionView;
@@ -8,7 +8,7 @@ use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_pubkey::Pubkey;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct TransactionMap(SlotMap<TransactionStateKey, TransactionState>);
 
 impl TransactionMap {
@@ -16,8 +16,13 @@ impl TransactionMap {
         Self(SlotMap::with_capacity_and_key(cap))
     }
 
-    pub(crate) fn insert(&mut self, shared: SharableTransactionRegion) -> TransactionStateKey {
-        self.0.insert(TransactionState { shared, resolved: None })
+    pub(crate) fn insert(
+        &mut self,
+        shared: SharableTransactionRegion,
+        view: TransactionView<true, TransactionPtr>,
+    ) -> TransactionStateKey {
+        self.0
+            .insert(TransactionState { shared, view, resolved: None })
     }
 
     /// Removes the transaction from the map & frees the underlying objects.
@@ -34,11 +39,11 @@ impl TransactionMap {
         let state = self.0.remove(key).unwrap();
 
         // SAFETY
-        // - Caller must not have freed the offsets prior.
+        // - Caller must not have freed the objects prior.
         unsafe {
-            allocator.free_offset(state.shared.offset);
+            state.view.into_inner_data().free(allocator);
             if let Some(resolved) = state.resolved {
-                allocator.free_offset(resolved.offset);
+                resolved.free(allocator);
             }
         }
     }
@@ -62,7 +67,6 @@ slotmap::new_key_type! {
     pub(crate) struct TransactionStateKey;
 }
 
-#[derive(Debug)]
 pub(crate) struct TransactionState {
     pub(crate) shared: SharableTransactionRegion,
     pub(crate) view: TransactionView<true, TransactionPtr>,
@@ -76,7 +80,7 @@ impl TransactionState {
             .iter()
             .chain(self.resolved.as_ref().unwrap().as_slice().iter())
             .enumerate()
-            .filter(|(i, _)| self.is_writable(*i))
+            .filter(|(i, _)| self.is_writable(*i as u8))
             .map(|(_, key)| key)
     }
 
@@ -86,11 +90,24 @@ impl TransactionState {
             .iter()
             .chain(self.resolved.as_ref().unwrap().as_slice().iter())
             .enumerate()
-            .filter(|(i, _)| !self.is_writable(*i))
+            .filter(|(i, _)| !self.is_writable(*i as u8))
             .map(|(_, key)| key)
     }
 
-    fn is_writable(&self, index: usize) -> bool {
-        true
+    fn is_writable(&self, index: u8) -> bool {
+        if index >= self.view.num_static_account_keys() {
+            let loaded_address_index = index.wrapping_sub(self.view.num_static_account_keys());
+            loaded_address_index < self.view.total_writable_lookup_accounts() as u8
+        } else {
+            index
+                < self
+                    .view
+                    .num_signatures()
+                    .wrapping_sub(self.view.num_readonly_signed_static_accounts())
+                || (index >= self.view.num_signatures()
+                    && index
+                        < (self.view.static_account_keys().len() as u8)
+                            .wrapping_sub(self.view.num_readonly_unsigned_static_accounts()))
+        }
     }
 }

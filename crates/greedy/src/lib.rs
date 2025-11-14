@@ -15,6 +15,7 @@ use agave_scheduler_bindings::{
     WorkerToPackMessage, pack_message_flags, processed_codes,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::responses_region::CheckResponsesPtr;
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
@@ -184,8 +185,8 @@ impl GreedyScheduler {
             let msg = queues.tpu_to_pack.try_read().unwrap();
 
             match Self::calculate_priority(&self.runtime, &self.allocator, msg) {
-                Some((priority, cost)) => {
-                    let key = self.state.insert(msg.transaction);
+                Some((view, priority, cost)) => {
+                    let key = self.state.insert(msg.transaction, view);
                     self.unchecked.push(PriorityId { priority, cost, key });
                 }
                 // SAFETY:
@@ -269,10 +270,10 @@ impl GreedyScheduler {
                         let tx = &self.state[id.key];
                         if tx
                             .write_locks()
-                            .any(|key| self.schedule_locks.insert(key, true).is_none())
+                            .any(|key| self.schedule_locks.insert(*key, true).is_none())
                             && tx.read_locks().any(|key| {
                                 self.schedule_locks
-                                    .insert(key, false)
+                                    .insert(*key, false)
                                     .is_some_and(|writable| writable)
                             })
                         {
@@ -373,7 +374,13 @@ impl GreedyScheduler {
             self.checked.push(id);
 
             // Update the state to include the resolved pubkeys.
-            self.state[id.key].resolved = Some(rep.resolved_pubkeys);
+            //
+            // SAFETY
+            // - Trust Agave to have allocated the pubkeys properly & transferred ownership
+            //   to us.
+            self.state[id.key].resolved = Some(unsafe {
+                PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
+            });
         }
 
         // Free both containers.
@@ -460,7 +467,7 @@ impl GreedyScheduler {
         runtime: &RuntimeState,
         allocator: &Allocator,
         msg: &TpuToPackMessage,
-    ) -> Option<(u64, u32)> {
+    ) -> Option<(TransactionView<true, TransactionPtr>, u64, u32)> {
         let tx = SanitizedTransactionView::try_new_sanitized(
             // SAFETY:
             // - Trust Agave to have allocated the shared transactin region correctly.
@@ -506,6 +513,7 @@ impl GreedyScheduler {
 
         // Compute priority.
         Some((
+            tx.into_inner_transaction(),
             reward
                 .saturating_mul(1_000_000)
                 .saturating_div(cost.saturating_add(1)),
