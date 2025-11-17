@@ -239,7 +239,9 @@ impl GreedyScheduler {
 
         // Update metrics with our scheduled amount.
         let new_rem = queue.capacity() - queue.len();
-        self.metrics.checks.increment((start_rem - new_rem) as u64);
+        self.metrics
+            .check_requested
+            .increment((start_rem - new_rem) as u64);
     }
 
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
@@ -314,7 +316,7 @@ impl GreedyScheduler {
 
             // Update metrics.
             self.metrics
-                .executes
+                .execute_requested
                 .increment(u64::from(batch.num_transactions));
 
             // Write the next batch for the worker.
@@ -350,6 +352,8 @@ impl GreedyScheduler {
         };
         assert_eq!(batch.len(), responses.len());
 
+        let mut ok = 0;
+        let mut err = 0;
         for ((_, id), rep) in batch.iter().zip(responses.iter().copied()) {
             let parsing_failed =
                 rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
@@ -363,6 +367,9 @@ impl GreedyScheduler {
                 unsafe {
                     self.state.remove(&self.allocator, id.key);
                 }
+
+                // Update local metric tracker.
+                err += 1;
 
                 continue;
             }
@@ -382,6 +389,8 @@ impl GreedyScheduler {
                 // SAFETY
                 // - We have not previously freed the underlying transaction/pubkey objects.
                 unsafe { self.state.remove(&self.allocator, evicted.key) };
+
+                // TODO: Metric.
             }
 
             // Insert the new transaction (yes this may be lower priority then what
@@ -398,11 +407,18 @@ impl GreedyScheduler {
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
             }
+
+            // Update metric.
+            ok += 1;
         }
 
         // Free both containers.
         batch.free();
         responses.free();
+
+        // Commit metrics.
+        self.metrics.check_ok.increment(ok);
+        self.metrics.check_err.increment(err);
     }
 
     fn on_execute(&mut self, msg: &WorkerToPackMessage) {
@@ -544,8 +560,10 @@ struct GreedyMetrics {
     unchecked_len: Gauge,
     checked_len: Gauge,
     cu_in_flight: Gauge,
-    checks: Counter,
-    executes: Counter,
+    check_requested: Counter,
+    check_ok: Counter,
+    check_err: Counter,
+    execute_requested: Counter,
 }
 
 impl GreedyMetrics {
@@ -554,8 +572,10 @@ impl GreedyMetrics {
             unchecked_len: gauge!("unchecked_len"),
             checked_len: gauge!("checked_len"),
             cu_in_flight: gauge!("cu_in_flight"),
-            checks: counter!("checks"),
-            executes: counter!("executes"),
+            check_requested: counter!("check_requested"),
+            check_ok: counter!("check_ok"),
+            check_err: counter!("check_err"),
+            execute_requested: counter!("execute_requested"),
         }
     }
 }
