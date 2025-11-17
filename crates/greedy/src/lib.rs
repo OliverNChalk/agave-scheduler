@@ -132,6 +132,10 @@ impl GreedyScheduler {
         }
 
         // Update metrics.
+        self.metrics.slot.set(self.progress.current_slot as f64);
+        self.metrics
+            .next_leader_slot
+            .set(self.progress.next_leader_slot as f64);
         self.metrics.unchecked_len.set(self.unchecked.len() as f64);
         self.metrics.checked_len.set(self.checked.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
@@ -568,6 +572,8 @@ impl GreedyScheduler {
 }
 
 struct GreedyMetrics {
+    slot: Gauge,
+    next_leader_slot: Gauge,
     unchecked_len: Gauge,
     checked_len: Gauge,
     cu_in_flight: Gauge,
@@ -585,6 +591,8 @@ struct GreedyMetrics {
 impl GreedyMetrics {
     fn new() -> Self {
         Self {
+            slot: gauge!("slot"),
+            next_leader_slot: gauge!("next_leader_slot"),
             unchecked_len: gauge!("unchecked_len"),
             checked_len: gauge!("checked_len"),
             recv_ok: counter!("recv_ok"),
