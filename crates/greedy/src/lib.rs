@@ -312,6 +312,11 @@ impl GreedyScheduler {
                 return;
             }
 
+            // Update metrics.
+            self.metrics
+                .executes
+                .increment(u64::from(batch.num_transactions));
+
             // Write the next batch for the worker.
             worker
                 .pack_to_worker
