@@ -1478,7 +1478,6 @@ dependencies = [
  "clap",
  "futures",
  "greedy",
- "metrics",
  "metrics-nats-exporter",
  "serde",
  "serde_yaml",

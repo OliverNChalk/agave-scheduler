@@ -13,7 +13,6 @@ agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }
 greedy.workspace = true
-metrics.workspace = true
 metrics-nats-exporter.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
