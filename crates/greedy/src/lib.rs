@@ -20,6 +20,7 @@ use agave_scheduling_utils::responses_region::CheckResponsesPtr;
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
 use hashbrown::HashMap;
+use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
@@ -61,8 +62,10 @@ pub struct GreedyScheduler {
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
     state: TransactionMap,
-    in_flight_cost: u32,
+    cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
+
+    metrics: GreedyMetrics,
 }
 
 impl GreedyScheduler {
@@ -93,8 +96,10 @@ impl GreedyScheduler {
                 unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 state: TransactionMap::with_capacity(STATE_CAPACITY),
-                in_flight_cost: 0,
+                cu_in_flight: 0,
                 schedule_locks: HashMap::default(),
+
+                metrics: GreedyMetrics::new(),
             },
             GreedyQueues { tpu_to_pack, progress_tracker, workers },
         )
@@ -104,6 +109,10 @@ impl GreedyScheduler {
         // Drain the progress tracker so we know which slot we're on.
         self.drain_progress(queues);
         let is_leader = self.progress.leader_state == IS_LEADER;
+
+        // TODO: Think about re-checking all TXs on slot roll (or at least
+        // expired TXs). If we do this we should use a dense slotmap to make
+        // iteration fast.
 
         // Drain responses from workers.
         self.drain_worker_responses(queues);
@@ -122,9 +131,14 @@ impl GreedyScheduler {
             self.schedule_execute(queues);
         }
 
-        // TODO: Think about re-checking all TXs on slot roll (or at least
-        // expired TXs). If we do this we should use a dense slotmap to make
-        // iteration fast.
+        // Update metrics.
+        self.metrics.slot.set(self.progress.current_slot as f64);
+        self.metrics
+            .next_leader_slot
+            .set(self.progress.next_leader_slot as f64);
+        self.metrics.unchecked_len.set(self.unchecked.len() as f64);
+        self.metrics.checked_len.set(self.checked.len() as f64);
+        self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
     fn drain_progress(&mut self, queues: &mut GreedyQueues) {
@@ -178,9 +192,12 @@ impl GreedyScheduler {
             // - We have not previously freed this transaction.
             unsafe { self.state.remove(&self.allocator, id.key) };
         }
+        self.metrics.recv_evict.increment(shortfall as u64);
 
-        // TODO: Need to dedupe already seen transactions.
+        // TODO: Need to dedupe already seen transactions?
 
+        let mut ok = 0;
+        let mut err = 0;
         for _ in 0..additional {
             let msg = queues.tpu_to_pack.try_read().unwrap();
 
@@ -188,30 +205,35 @@ impl GreedyScheduler {
                 Some((view, priority, cost)) => {
                     let key = self.state.insert(msg.transaction, view);
                     self.unchecked.push(PriorityId { priority, cost, key });
+                    ok += 1;
                 }
                 // SAFETY:
                 // - Trust Agave to have correctly allocated & trenferred ownership of this
                 //   transaction region to us.
                 None => unsafe {
                     self.allocator.free_offset(msg.transaction.offset);
+                    err += 1;
                 },
             }
         }
+
+        // Commit metrics.
+        self.metrics.recv_ok.increment(ok);
+        self.metrics.recv_err.increment(err);
     }
 
     fn schedule_checks(&mut self, queues: &mut GreedyQueues) {
-        let worker = &mut queues.workers[0];
-        worker.pack_to_worker.sync();
+        let queue = &mut queues.workers[0].pack_to_worker;
+        queue.sync();
 
         // Loop until worker queue is filled or backlog is empty.
-        let worker_capacity = worker.pack_to_worker.capacity();
-        for _ in 0..worker_capacity {
+        let start_rem = queue.capacity() - queue.len();
+        for _ in 0..start_rem {
             if self.unchecked.is_empty() {
                 break;
             }
 
-            worker
-                .pack_to_worker
+            queue
                 .try_write(PackToWorkerMessage {
                     flags: pack_message_flags::CHECK
                         | check_flags::STATUS_CHECKS
@@ -226,8 +248,13 @@ impl GreedyScheduler {
                 })
                 .unwrap();
         }
+        queue.commit();
 
-        worker.pack_to_worker.commit();
+        // Update metrics with our scheduled amount.
+        let new_rem = queue.capacity() - queue.len();
+        self.metrics
+            .check_requested
+            .increment((start_rem - new_rem) as u64);
     }
 
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
@@ -241,7 +268,7 @@ impl GreedyScheduler {
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
             .saturating_sub(self.progress.remaining_cost_units)
-            + u64::from(self.in_flight_cost);
+            + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut queues.workers[1..] {
             if budget_remaining == 0 || self.checked.is_empty() {
@@ -289,7 +316,7 @@ impl GreedyScheduler {
                         true
                     })
                     .map(|id| {
-                        self.in_flight_cost += id.cost;
+                        self.cu_in_flight += id.cost;
 
                         (id, self.state[id.key].shared)
                     })
@@ -299,6 +326,11 @@ impl GreedyScheduler {
             if batch.num_transactions == 0 {
                 return;
             }
+
+            // Update metrics.
+            self.metrics
+                .execute_requested
+                .increment(u64::from(batch.num_transactions));
 
             // Write the next batch for the worker.
             worker
@@ -333,6 +365,9 @@ impl GreedyScheduler {
         };
         assert_eq!(batch.len(), responses.len());
 
+        let mut ok = 0;
+        let mut err = 0;
+        let mut evicted = 0;
         for ((_, id), rep) in batch.iter().zip(responses.iter().copied()) {
             let parsing_failed =
                 rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
@@ -346,6 +381,9 @@ impl GreedyScheduler {
                 unsafe {
                     self.state.remove(&self.allocator, id.key);
                 }
+
+                // Update local metric tracker.
+                err += 1;
 
                 continue;
             }
@@ -361,10 +399,12 @@ impl GreedyScheduler {
 
             // Evict lowest priority if at capacity.
             if self.checked.len() == CHECKED_CAPACITY {
-                let evicted = self.checked.pop_min().unwrap();
+                let id = self.checked.pop_min().unwrap();
                 // SAFETY
                 // - We have not previously freed the underlying transaction/pubkey objects.
-                unsafe { self.state.remove(&self.allocator, evicted.key) };
+                unsafe { self.state.remove(&self.allocator, id.key) };
+
+                evicted += 1;
             }
 
             // Insert the new transaction (yes this may be lower priority then what
@@ -381,11 +421,19 @@ impl GreedyScheduler {
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
             }
+
+            // Update metric.
+            ok += 1;
         }
 
         // Free both containers.
         batch.free();
         responses.free();
+
+        // Commit metrics.
+        self.metrics.check_ok.increment(ok);
+        self.metrics.check_err.increment(err);
+        self.metrics.check_evict.increment(evicted);
     }
 
     fn on_execute(&mut self, msg: &WorkerToPackMessage) {
@@ -399,7 +447,7 @@ impl GreedyScheduler {
 
         // Remove in-flight costs and free all transactions.
         for (tx, id) in batch.iter() {
-            self.in_flight_cost -= id.cost;
+            self.cu_in_flight -= id.cost;
 
             // SAFETY:
             // - Trust Agave not to have already freed this transaction as we are the owner.
@@ -520,6 +568,43 @@ impl GreedyScheduler {
             // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
             cost.try_into().unwrap(),
         ))
+    }
+}
+
+struct GreedyMetrics {
+    slot: Gauge,
+    next_leader_slot: Gauge,
+    unchecked_len: Gauge,
+    checked_len: Gauge,
+    cu_in_flight: Gauge,
+    recv_ok: Counter,
+    recv_err: Counter,
+    recv_evict: Counter,
+    check_requested: Counter,
+    check_ok: Counter,
+    check_err: Counter,
+    check_evict: Counter,
+    execute_requested: Counter,
+    // TODO: Inspect execute responses to determine ok/err.
+}
+
+impl GreedyMetrics {
+    fn new() -> Self {
+        Self {
+            slot: gauge!("slot"),
+            next_leader_slot: gauge!("next_leader_slot"),
+            unchecked_len: gauge!("unchecked_len"),
+            checked_len: gauge!("checked_len"),
+            recv_ok: counter!("recv_ok"),
+            recv_err: counter!("recv_err"),
+            recv_evict: counter!("recv_evict"),
+            cu_in_flight: gauge!("cu_in_flight"),
+            check_requested: counter!("check_requested"),
+            check_ok: counter!("check_ok"),
+            check_err: counter!("check_err"),
+            check_evict: counter!("check_evict"),
+            execute_requested: counter!("execute_requested"),
+        }
     }
 }
 
