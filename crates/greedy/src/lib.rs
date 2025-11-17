@@ -230,12 +230,6 @@ impl GreedyScheduler {
         worker.pack_to_worker.commit();
     }
 
-    // TODO:
-    //
-    // - Track read/write locks for the current batch.
-    //   - Once we hit a conflict, send the batch off & return.
-    // - Use workers in a round robin fashion.
-    // - Do not build a batch if any worker has a non-empty queue.
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
         self.schedule_locks.clear();
 
@@ -252,6 +246,12 @@ impl GreedyScheduler {
         for worker in &mut queues.workers[1..] {
             if budget_remaining == 0 || self.checked.is_empty() {
                 return;
+            }
+
+            // If the worker already has a pending job, don't give it any more.
+            worker.pack_to_worker.sync();
+            if !worker.pack_to_worker.is_empty() {
+                continue;
             }
 
             let batch = Self::collect_batch(&self.allocator, || {
@@ -300,9 +300,7 @@ impl GreedyScheduler {
                 return;
             }
 
-            worker.pack_to_worker.sync();
-            // TODO: Figure out back pressure with workers to ensure they are all keeping
-            // up.
+            // Write the next batch for the worker.
             worker
                 .pack_to_worker
                 .try_write(PackToWorkerMessage {
