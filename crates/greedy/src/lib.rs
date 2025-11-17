@@ -241,7 +241,7 @@ impl GreedyScheduler {
                         | check_flags::STATUS_CHECKS
                         | check_flags::LOAD_FEE_PAYER_BALANCE
                         | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-                    max_working_slot: self.progress.current_slot + 1,
+                    max_working_slot: u64::MAX,
                     batch: Self::collect_batch(&self.allocator, || {
                         self.unchecked
                             .pop_max()
