@@ -5,13 +5,14 @@ allowed_blank_lines = 1
 
 [[rule]]
 keys = [
-  "lints.clippy",
+  "build-dependencies",
   "dependencies",
   "dev-dependencies",
-  "build-dependencies",
+  "lints.clippy",
+  "patch",
   "toolchain",
   "workspace.dependencies",
-  "patch",
+  "workspace.lints.clippy",
 ]
 
 [rule.formatting]

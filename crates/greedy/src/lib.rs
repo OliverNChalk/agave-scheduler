@@ -237,7 +237,6 @@ impl GreedyScheduler {
     // - Use workers in a round robin fashion.
     // - Do not build a batch if any worker has a non-empty queue.
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
-        println!("schedule");
         self.schedule_locks.clear();
 
         debug_assert_eq!(self.progress.leader_state, IS_LEADER);
@@ -251,7 +250,6 @@ impl GreedyScheduler {
             + u64::from(self.in_flight_cost);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut queues.workers[1..] {
-            println!("{budget_remaining}");
             if budget_remaining == 0 || self.checked.is_empty() {
                 return;
             }
@@ -270,7 +268,6 @@ impl GreedyScheduler {
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
                         let tx = &self.state[id.key];
-                        println!("{}", tx.view.signatures()[0]);
                         if tx
                             .write_locks()
                             .any(|key| self.schedule_locks.insert(*key, true).is_some())
@@ -280,7 +277,6 @@ impl GreedyScheduler {
                                     .is_some_and(|writable| writable)
                             })
                         {
-                            println!("conflict");
                             self.checked.push(*id);
                             budget_remaining = 0;
 
