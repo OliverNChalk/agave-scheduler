@@ -6,8 +6,8 @@ mod transaction_map;
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
-    self, fee_payer_balance_flags, parsing_and_sanitization_flags, resolve_flags,
-    status_check_flags,
+    self, fee_payer_balance_flags, not_included_reasons, parsing_and_sanitization_flags,
+    resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
@@ -16,7 +16,7 @@ use agave_scheduler_bindings::{
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
-use agave_scheduling_utils::responses_region::CheckResponsesPtr;
+use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
 use hashbrown::HashMap;
@@ -440,18 +440,35 @@ impl GreedyScheduler {
         // SAFETY:
         // - Trust Agave to have allocated the batch/responses properly & told us the
         //   correct size.
-        // - Don't duplicate wrapper so we cannot double free.
-        let batch: TransactionPtrBatch<PriorityId> = unsafe {
-            TransactionPtrBatch::from_sharable_transaction_batch_region(&msg.batch, &self.allocator)
+        // - Use the correct wrapper type (execute response ptr).
+        // - Don't duplicate wrappers so we cannot double free.
+        let (batch, responses) = unsafe {
+            (
+                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
+                    &msg.batch,
+                    &self.allocator,
+                ),
+                ExecutionResponsesPtr::from_transaction_response_region(
+                    &msg.responses,
+                    &self.allocator,
+                ),
+            )
         };
 
         // Remove in-flight costs and free all transactions.
-        for (tx, id) in batch.iter() {
+        let mut ok = 0;
+        let mut err = 0;
+        for ((tx, id), rep) in batch.iter().zip(responses.iter()) {
             self.cu_in_flight -= id.cost;
 
             // SAFETY:
             // - Trust Agave not to have already freed this transaction as we are the owner.
             unsafe { tx.free(&self.allocator) };
+
+            // Update metrics.
+            let included = rep.not_included_reason == not_included_reasons::NONE;
+            ok += u64::from(included);
+            err += u64::from(!included);
         }
 
         // Free the containers.
@@ -462,6 +479,10 @@ impl GreedyScheduler {
             self.allocator
                 .free_offset(msg.responses.transaction_responses_offset);
         }
+
+        // Commit metrics.
+        self.metrics.execute_ok.increment(ok);
+        self.metrics.execute_err.increment(err);
     }
 
     fn collect_batch(
@@ -585,6 +606,8 @@ struct GreedyMetrics {
     check_err: Counter,
     check_evict: Counter,
     execute_requested: Counter,
+    execute_ok: Counter,
+    execute_err: Counter,
     // TODO: Inspect execute responses to determine ok/err.
 }
 
@@ -604,6 +627,8 @@ impl GreedyMetrics {
             check_err: counter!("check_err"),
             check_evict: counter!("check_evict"),
             execute_requested: counter!("execute_requested"),
+            execute_ok: counter!("execute_ok"),
+            execute_err: counter!("execute_err"),
         }
     }
 }
