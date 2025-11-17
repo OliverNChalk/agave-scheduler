@@ -20,7 +20,7 @@ use agave_scheduling_utils::responses_region::CheckResponsesPtr;
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
 use hashbrown::HashMap;
-use metrics::{Gauge, gauge};
+use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
@@ -210,18 +210,17 @@ impl GreedyScheduler {
     }
 
     fn schedule_checks(&mut self, queues: &mut GreedyQueues) {
-        let worker = &mut queues.workers[0];
-        worker.pack_to_worker.sync();
+        let queue = &mut queues.workers[0].pack_to_worker;
+        queue.sync();
 
         // Loop until worker queue is filled or backlog is empty.
-        let worker_capacity = worker.pack_to_worker.capacity();
-        for _ in 0..worker_capacity {
+        let start_rem = queue.capacity() - queue.len();
+        for _ in 0..start_rem {
             if self.unchecked.is_empty() {
                 break;
             }
 
-            worker
-                .pack_to_worker
+            queue
                 .try_write(PackToWorkerMessage {
                     flags: pack_message_flags::CHECK
                         | check_flags::STATUS_CHECKS
@@ -236,8 +235,11 @@ impl GreedyScheduler {
                 })
                 .unwrap();
         }
+        queue.commit();
 
-        worker.pack_to_worker.commit();
+        // Update metrics with our scheduled amount.
+        let new_rem = queue.capacity() - queue.len();
+        self.metrics.checks.increment((start_rem - new_rem) as u64);
     }
 
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
@@ -537,6 +539,8 @@ struct GreedyMetrics {
     unchecked_len: Gauge,
     checked_len: Gauge,
     cu_in_flight: Gauge,
+    checks: Counter,
+    executes: Counter,
 }
 
 impl GreedyMetrics {
@@ -545,6 +549,8 @@ impl GreedyMetrics {
             unchecked_len: gauge!("unchecked_len"),
             checked_len: gauge!("checked_len"),
             cu_in_flight: gauge!("cu_in_flight"),
+            checks: counter!("checks"),
+            executes: counter!("executes"),
         }
     }
 }
