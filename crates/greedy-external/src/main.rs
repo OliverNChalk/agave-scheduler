@@ -1,4 +1,5 @@
 mod args;
+mod config;
 mod control_thread;
 mod scheduler_thread;
 
@@ -24,6 +25,9 @@ fn main() -> std::thread::Result<()> {
         default_panic(panic_info);
     }));
 
+    // Load config.
+    let config = serde_yaml::from_slice(&toolbox::fs::must_read(&args.config)).unwrap();
+
     // Start server.
-    ControlThread::run_in_place(args.bindings_ipc)
+    ControlThread::run_in_place(config, args.bindings_ipc)
 }

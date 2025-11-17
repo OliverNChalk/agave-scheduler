@@ -20,6 +20,7 @@ use agave_scheduling_utils::responses_region::CheckResponsesPtr;
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
 use hashbrown::HashMap;
+use metrics::{Gauge, gauge};
 use min_max_heap::MinMaxHeap;
 use rts_alloc::Allocator;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
@@ -61,8 +62,10 @@ pub struct GreedyScheduler {
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
     state: TransactionMap,
-    in_flight_cost: u32,
+    cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
+
+    metrics: GreedyMetrics,
 }
 
 impl GreedyScheduler {
@@ -93,8 +96,10 @@ impl GreedyScheduler {
                 unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 state: TransactionMap::with_capacity(STATE_CAPACITY),
-                in_flight_cost: 0,
+                cu_in_flight: 0,
                 schedule_locks: HashMap::default(),
+
+                metrics: GreedyMetrics::new(),
             },
             GreedyQueues { tpu_to_pack, progress_tracker, workers },
         )
@@ -104,6 +109,10 @@ impl GreedyScheduler {
         // Drain the progress tracker so we know which slot we're on.
         self.drain_progress(queues);
         let is_leader = self.progress.leader_state == IS_LEADER;
+
+        // TODO: Think about re-checking all TXs on slot roll (or at least
+        // expired TXs). If we do this we should use a dense slotmap to make
+        // iteration fast.
 
         // Drain responses from workers.
         self.drain_worker_responses(queues);
@@ -122,9 +131,10 @@ impl GreedyScheduler {
             self.schedule_execute(queues);
         }
 
-        // TODO: Think about re-checking all TXs on slot roll (or at least
-        // expired TXs). If we do this we should use a dense slotmap to make
-        // iteration fast.
+        // Update metrics.
+        self.metrics.unchecked_len.set(self.unchecked.len() as f64);
+        self.metrics.checked_len.set(self.checked.len() as f64);
+        self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
     fn drain_progress(&mut self, queues: &mut GreedyQueues) {
@@ -241,7 +251,7 @@ impl GreedyScheduler {
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
             .saturating_sub(self.progress.remaining_cost_units)
-            + u64::from(self.in_flight_cost);
+            + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in &mut queues.workers[1..] {
             if budget_remaining == 0 || self.checked.is_empty() {
@@ -289,7 +299,7 @@ impl GreedyScheduler {
                         true
                     })
                     .map(|id| {
-                        self.in_flight_cost += id.cost;
+                        self.cu_in_flight += id.cost;
 
                         (id, self.state[id.key].shared)
                     })
@@ -399,7 +409,7 @@ impl GreedyScheduler {
 
         // Remove in-flight costs and free all transactions.
         for (tx, id) in batch.iter() {
-            self.in_flight_cost -= id.cost;
+            self.cu_in_flight -= id.cost;
 
             // SAFETY:
             // - Trust Agave not to have already freed this transaction as we are the owner.
@@ -520,6 +530,22 @@ impl GreedyScheduler {
             // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
             cost.try_into().unwrap(),
         ))
+    }
+}
+
+struct GreedyMetrics {
+    unchecked_len: Gauge,
+    checked_len: Gauge,
+    cu_in_flight: Gauge,
+}
+
+impl GreedyMetrics {
+    fn new() -> Self {
+        Self {
+            unchecked_len: gauge!("unchecked_len"),
+            checked_len: gauge!("checked_len"),
+            cu_in_flight: gauge!("cu_in_flight"),
+        }
     }
 }
 

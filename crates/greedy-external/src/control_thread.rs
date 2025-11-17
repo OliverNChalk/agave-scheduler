@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -8,6 +9,7 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
+use crate::config::Config;
 use crate::scheduler_thread::SchedulerThread;
 
 pub(crate) struct ControlThread {
@@ -16,21 +18,41 @@ pub(crate) struct ControlThread {
 }
 
 impl ControlThread {
-    pub(crate) fn run_in_place(bindings_ipc: PathBuf) -> std::thread::Result<()> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+    pub(crate) fn run_in_place(config: Config, bindings_ipc: PathBuf) -> std::thread::Result<()> {
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let server = ControlThread::setup(&runtime, bindings_ipc);
+        let server = rt.block_on(ControlThread::setup(&rt, config, bindings_ipc));
 
-        runtime.block_on(server.run())
+        rt.block_on(server.run())
     }
 
-    fn setup(runtime: &Runtime, bindings_ipc: PathBuf) -> Self {
+    async fn setup(runtime: &Runtime, config: Config, bindings_ipc: PathBuf) -> Self {
         let shutdown = Shutdown::new();
 
-        // Setup app threads.
-        let threads = vec![SchedulerThread::spawn(shutdown.clone(), bindings_ipc)];
+        // Spawn metrics publisher.
+        let mut threads = Vec::default();
+        let nats_client = Box::leak(Box::new(
+            metrics_nats_exporter::async_nats::connect(config.nats_servers)
+                .await
+                .expect("NATS Client Connect"),
+        ));
+        threads.push(
+            metrics_nats_exporter::install(
+                shutdown.token.clone(),
+                metrics_nats_exporter::Config {
+                    interval_min: Duration::from_millis(50),
+                    interval_max: Duration::from_millis(1000),
+                    metric_prefix: Some(format!("metric.greedy-external.{}", config.host_name)),
+                },
+                nats_client,
+            )
+            .unwrap(),
+        );
+
+        // Spawn scheduler.
+        threads.push(SchedulerThread::spawn(shutdown.clone(), bindings_ipc));
 
         // Use tokio to listen on all thread exits concurrently.
         let threads = threads
