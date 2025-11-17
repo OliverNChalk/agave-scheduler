@@ -188,9 +188,12 @@ impl GreedyScheduler {
             // - We have not previously freed this transaction.
             unsafe { self.state.remove(&self.allocator, id.key) };
         }
+        self.metrics.recv_evict.increment(shortfall as u64);
 
-        // TODO: Need to dedupe already seen transactions.
+        // TODO: Need to dedupe already seen transactions?
 
+        let mut ok = 0;
+        let mut err = 0;
         for _ in 0..additional {
             let msg = queues.tpu_to_pack.try_read().unwrap();
 
@@ -198,15 +201,21 @@ impl GreedyScheduler {
                 Some((view, priority, cost)) => {
                     let key = self.state.insert(msg.transaction, view);
                     self.unchecked.push(PriorityId { priority, cost, key });
+                    ok += 1;
                 }
                 // SAFETY:
                 // - Trust Agave to have correctly allocated & trenferred ownership of this
                 //   transaction region to us.
                 None => unsafe {
                     self.allocator.free_offset(msg.transaction.offset);
+                    err += 1;
                 },
             }
         }
+
+        // Commit metrics.
+        self.metrics.recv_ok.increment(ok);
+        self.metrics.recv_err.increment(err);
     }
 
     fn schedule_checks(&mut self, queues: &mut GreedyQueues) {
@@ -354,6 +363,7 @@ impl GreedyScheduler {
 
         let mut ok = 0;
         let mut err = 0;
+        let mut evicted = 0;
         for ((_, id), rep) in batch.iter().zip(responses.iter().copied()) {
             let parsing_failed =
                 rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
@@ -385,12 +395,12 @@ impl GreedyScheduler {
 
             // Evict lowest priority if at capacity.
             if self.checked.len() == CHECKED_CAPACITY {
-                let evicted = self.checked.pop_min().unwrap();
+                let id = self.checked.pop_min().unwrap();
                 // SAFETY
                 // - We have not previously freed the underlying transaction/pubkey objects.
-                unsafe { self.state.remove(&self.allocator, evicted.key) };
+                unsafe { self.state.remove(&self.allocator, id.key) };
 
-                // TODO: Metric.
+                evicted += 1;
             }
 
             // Insert the new transaction (yes this may be lower priority then what
@@ -419,6 +429,7 @@ impl GreedyScheduler {
         // Commit metrics.
         self.metrics.check_ok.increment(ok);
         self.metrics.check_err.increment(err);
+        self.metrics.check_evict.increment(evicted);
     }
 
     fn on_execute(&mut self, msg: &WorkerToPackMessage) {
@@ -560,10 +571,15 @@ struct GreedyMetrics {
     unchecked_len: Gauge,
     checked_len: Gauge,
     cu_in_flight: Gauge,
+    recv_ok: Counter,
+    recv_err: Counter,
+    recv_evict: Counter,
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
+    check_evict: Counter,
     execute_requested: Counter,
+    // TODO: Inspect execute responses to determine ok/err.
 }
 
 impl GreedyMetrics {
@@ -571,10 +587,14 @@ impl GreedyMetrics {
         Self {
             unchecked_len: gauge!("unchecked_len"),
             checked_len: gauge!("checked_len"),
+            recv_ok: counter!("recv_ok"),
+            recv_err: counter!("recv_err"),
+            recv_evict: counter!("recv_evict"),
             cu_in_flight: gauge!("cu_in_flight"),
             check_requested: counter!("check_requested"),
             check_ok: counter!("check_ok"),
             check_err: counter!("check_err"),
+            check_evict: counter!("check_evict"),
             execute_requested: counter!("execute_requested"),
         }
     }
