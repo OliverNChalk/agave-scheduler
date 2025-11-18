@@ -21,14 +21,14 @@ use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatc
 const CHECK_WORKER: WorkerId = WorkerId;
 const EXECUTE_WORKER: WorkerId = WorkerId;
 
-pub struct FerrariScheduler {
+pub struct FifoScheduler {
     core: SchedulerCore,
     check_queue: VecDeque<TransactionId>,
     execute_queue: VecDeque<TransactionId>,
     batch: Vec<TransactionId>,
 }
 
-impl FerrariScheduler {
+impl FifoScheduler {
     #[must_use]
     pub fn new(core: SchedulerCore) -> Self {
         Self {
