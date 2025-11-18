@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use agave_scheduler_bindings::pack_message_flags::check_flags;
+use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, pack_message_flags,
 };
@@ -45,14 +46,10 @@ impl FifoScheduler {
         let is_leader = self.core.progress().leader_state == IS_LEADER;
 
         // Drain check responses.
-        while let Some((batch, rep)) = self.core.pop_check() {
-            todo!("free stuff");
-        }
+        while self.core.pop_check(|id, tx, rep| TpuDecision::Drop) {} // TODO
 
         // Drain execute responses.
-        while let Some((batch, rep)) = self.core.pop_execute() {
-            todo!("free stuff");
-        }
+        while self.core.pop_execute(|id, tx, rep| TpuDecision::Drop) {} // TODO
 
         // Ingest a bounded amount of new transactions.
         let handle_tx = |(id, _)| {
@@ -121,17 +118,23 @@ impl SchedulerCore {
 
     fn drain_tpu(
         &mut self,
-        on_tpu: impl FnMut((TransactionId, TransactionPtr)) -> TpuDecision,
+        cb: impl FnMut((TransactionId, TransactionPtr)) -> TpuDecision,
         max_count: usize,
     ) {
         todo!()
     }
 
-    fn pop_check(&mut self) -> Option<(TransactionPtrBatch, CheckResponsesPtr)> {
+    fn pop_check(
+        &mut self,
+        cb: impl Fn(TransactionId, &TransactionPtr, &CheckResponse) -> TpuDecision,
+    ) -> bool {
         todo!()
     }
 
-    fn pop_execute(&mut self) -> Option<(TransactionPtrBatch, ExecutionResponsesPtr)> {
+    fn pop_execute(
+        &mut self,
+        cb: impl Fn(TransactionId, &TransactionPtr, &ExecutionResponse) -> TpuDecision,
+    ) -> bool {
         todo!()
     }
 
