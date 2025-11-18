@@ -53,7 +53,7 @@ impl FifoScheduler {
         }) {}
 
         // Drain execute responses.
-        while self.core.pop_execute(|id, tx, rep| TpuDecision::Drop) {} // TODO
+        while self.core.pop_execute(|id, _, _| TpuDecision::Drop) {}
 
         // Ingest a bounded amount of new transactions.
         let handle_tx = |(id, _)| {
