@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 
 use agave_scheduler_bindings::pack_message_flags::check_flags;
-use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
+use agave_scheduler_bindings::worker_message_types::{
+    CheckResponse, ExecutionResponse, parsing_and_sanitization_flags, status_check_flags,
+};
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, pack_message_flags,
 };
@@ -46,10 +48,22 @@ impl FifoScheduler {
         let is_leader = self.core.progress().leader_state == IS_LEADER;
 
         // Drain check responses.
-        while self.core.pop_check(|id, _, _| {
-            self.execute_queue.push_back(id);
+        while self.core.pop_check(|id, _, rep| {
+            // TODO: Dedupe with greedy & make this friendlier.
+            let parsing_failed =
+                rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
+            let status_failed = rep.status_check_flags
+                & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
+                != 0;
 
-            TpuDecision::Keep
+            match parsing_failed || status_failed {
+                true => TpuDecision::Drop,
+                false => {
+                    self.execute_queue.push_back(id);
+
+                    TpuDecision::Keep
+                }
+            }
         }) {}
 
         // Drain execute responses.
