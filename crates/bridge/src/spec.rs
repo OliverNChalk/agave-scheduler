@@ -1,6 +1,8 @@
+use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::ProgressMessage;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use solana_fee::FeeFeatures;
 
 pub trait Bridge {
     fn progress(&self) -> &ProgressMessage;
@@ -33,6 +35,13 @@ pub trait Bridge {
         max_working_slot: u64,
         flags: u16,
     );
+}
+
+pub struct RuntimeState {
+    pub feature_set: FeatureSet,
+    pub fee_features: FeeFeatures,
+    pub lamports_per_signature: u64,
+    pub burn_percent: u64,
 }
 
 #[derive(Debug, Clone, Copy)]

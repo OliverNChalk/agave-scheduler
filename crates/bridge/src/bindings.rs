@@ -1,10 +1,54 @@
-use agave_scheduler_bindings::ProgressMessage;
+use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
+use agave_scheduler_bindings::{ProgressMessage, TpuToPackMessage};
+use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use rts_alloc::Allocator;
+use solana_fee::FeeFeatures;
 
-use crate::{Bridge, TpuDecision, TransactionId, Worker, WorkerId};
+use crate::{Bridge, RuntimeState, TpuDecision, TransactionId, Worker, WorkerId};
 
-pub struct SchedulerBindings;
+pub struct SchedulerBindings {
+    allocator: Allocator,
+    tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
+    progress_tracker: shaq::Consumer<ProgressMessage>,
+    workers: Vec<ClientWorkerSession>,
+
+    progress: ProgressMessage,
+    runtime: RuntimeState,
+}
+
+impl SchedulerBindings {
+    #[must_use]
+    pub fn new(
+        ClientSession { mut allocators, tpu_to_pack, progress_tracker, workers }: ClientSession,
+    ) -> Self {
+        assert_eq!(allocators.len(), 1, "invalid number of allocators");
+
+        Self {
+            allocator: allocators.remove(0),
+            tpu_to_pack,
+            progress_tracker,
+            workers,
+
+            progress: ProgressMessage {
+                leader_state: 0,
+                current_slot: 0,
+                next_leader_slot: u64::MAX,
+                leader_range_end: u64::MAX,
+                remaining_cost_units: 0,
+                current_slot_progress: 0,
+            },
+            // TODO: Load this properly.
+            runtime: RuntimeState {
+                feature_set: FeatureSet::all_enabled(),
+                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
+                lamports_per_signature: 5000,
+                burn_percent: 50,
+            },
+        }
+    }
+}
 
 impl Bridge for SchedulerBindings {
     fn progress(&self) -> &ProgressMessage {
