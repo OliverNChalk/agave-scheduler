@@ -1,5 +1,9 @@
+use std::collections::VecDeque;
+
 use agave_scheduler_bindings::pack_message_flags::check_flags;
-use agave_scheduler_bindings::{IS_LEADER, ProgressMessage, pack_message_flags};
+use agave_scheduler_bindings::{
+    IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, pack_message_flags,
+};
 use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 
@@ -19,12 +23,20 @@ const EXECUTE_WORKER: WorkerId = WorkerId;
 
 pub struct FerrariScheduler {
     core: SchedulerCore,
+    check_queue: VecDeque<TransactionId>,
+    execute_queue: VecDeque<TransactionId>,
+    batch: Vec<TransactionId>,
 }
 
 impl FerrariScheduler {
     #[must_use]
     pub fn new(core: SchedulerCore) -> Self {
-        Self { core }
+        Self {
+            core,
+            check_queue: VecDeque::default(),
+            execute_queue: VecDeque::default(),
+            batch: Vec::with_capacity(MAX_TRANSACTIONS_PER_MESSAGE),
+        }
     }
 
     pub fn poll(&mut self) {
@@ -54,10 +66,14 @@ impl FerrariScheduler {
     fn schedule(&mut self) {
         // Schedule additional checks.
         while self.core.worker(CHECK_WORKER).rem() > 0 {
+            self.batch.clear();
+            self.batch.extend(
+                std::iter::from_fn(|| self.check_queue.pop_front())
+                    .take(MAX_TRANSACTIONS_PER_MESSAGE),
+            );
             self.core.schedule_check(
                 CHECK_WORKER,
-                // TODO: Construct batch.
-                &[],
+                &self.batch,
                 u64::MAX,
                 pack_message_flags::CHECK
                     | check_flags::STATUS_CHECKS
@@ -68,10 +84,14 @@ impl FerrariScheduler {
 
         // If we are the leader, schedule executes.
         if self.core.progress().leader_state == IS_LEADER {
+            self.batch.clear();
+            self.batch.extend(
+                std::iter::from_fn(|| self.execute_queue.pop_front())
+                    .take(MAX_TRANSACTIONS_PER_MESSAGE),
+            );
             self.core.schedule_execute(
                 EXECUTE_WORKER,
-                // TODO: Construct batch.
-                &[],
+                &self.batch,
                 self.core.progress().current_slot + 1,
                 pack_message_flags::EXECUTE,
             );
