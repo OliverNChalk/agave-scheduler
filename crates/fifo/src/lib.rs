@@ -7,8 +7,7 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, pack_message_flags,
 };
-use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
-use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
+use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 
 // TODO:
 //
@@ -67,18 +66,21 @@ impl FifoScheduler {
         }) {}
 
         // Drain execute responses.
-        while self.core.pop_execute(|id, _, _| TpuDecision::Drop) {}
+        while self.core.pop_execute(|_, _, _| TpuDecision::Drop) {}
 
         // Ingest a bounded amount of new transactions.
-        let handle_tx = |(id, _)| {
-            self.check_queue.push_back(id);
-
-            TpuDecision::Keep
+        let max_count = match is_leader {
+            true => 128,
+            false => 1024,
         };
-        match is_leader {
-            true => self.core.drain_tpu(handle_tx, 128),
-            false => self.core.drain_tpu(handle_tx, 1024),
-        }
+        self.core.drain_tpu(
+            |(id, _)| {
+                self.check_queue.push_back(id);
+
+                TpuDecision::Keep
+            },
+            max_count,
+        );
 
         self.schedule();
     }
