@@ -123,7 +123,7 @@ impl GreedyScheduler {
             false => self.drain_tpu(queues, 1024),
         }
 
-        // Drain pending checks.
+        // Queue additional checks.
         self.schedule_checks(queues);
 
         // Schedule if we're currently the leader.

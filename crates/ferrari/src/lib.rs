@@ -1,3 +1,4 @@
+use agave_scheduler_bindings::{IS_LEADER, ProgressMessage};
 use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 
@@ -12,13 +13,37 @@ impl FerrariScheduler {
     }
 
     pub fn poll(&mut self) {
-        todo!()
+        // Drain the progress tracker so we know which slot we're on.
+        self.core.drain_progress();
+        let is_leader = self.core.progress().leader_state == IS_LEADER;
+
+        // Drain check responses.
+        while let Some((batch, rep)) = self.core.pop_check() {
+            todo!("free stuff");
+        }
+
+        // Drain execute responses.
+        while let Some((batch, rep)) = self.core.pop_execute() {
+            todo!("free stuff");
+        }
+
+        // Ingest a bounded amount of new transactions.
+        match is_leader {
+            true => self.core.drain_tpu(|tx| todo!(), 128),
+            false => self.core.drain_tpu(|tx| todo!(), 1024),
+        }
+
+        todo!("Do our thing and schedule");
     }
 }
 
 struct SchedulerCore;
 
 impl SchedulerCore {
+    fn progress(&self) -> &ProgressMessage {
+        todo!()
+    }
+
     fn drain_progress(&mut self) {
         todo!()
     }
