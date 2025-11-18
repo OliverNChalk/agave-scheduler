@@ -1,12 +1,12 @@
+use std::ptr::NonNull;
+
 use agave_feature_set::FeatureSet;
-use agave_scheduler_bindings::worker_message_types::CheckResponse;
+use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{
-    ProgressMessage, SharableTransactionRegion, TpuToPackMessage, WorkerToPackMessage,
-    worker_message_types,
+    ProgressMessage, SharableTransactionRegion, TpuToPackMessage, worker_message_types,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
-use agave_scheduling_utils::responses_region::CheckResponsesPtr;
-use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
+use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
@@ -22,7 +22,7 @@ pub struct SchedulerBindings {
     progress: ProgressMessage,
     runtime: RuntimeState,
     transactions: SlotMap<TransactionId, ()>,
-    worker_response: Option<(WorkerToPackMessage, usize)>,
+    worker_response: Option<(NonNull<SharableTransactionRegion>, WorkerResponseBatch, usize)>,
 }
 
 impl SchedulerBindings {
@@ -115,7 +115,7 @@ impl Bridge for SchedulerBindings {
         worker: usize,
         mut cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)) -> TxDecision,
     ) -> bool {
-        let (rep, index) = match &mut self.worker_response {
+        let (batch, rep, index) = match &mut self.worker_response {
             Some(in_progress) => in_progress,
             None => {
                 self.workers[worker].0.worker_to_pack.sync();
@@ -124,43 +124,78 @@ impl Bridge for SchedulerBindings {
                 };
                 self.workers[worker].0.worker_to_pack.finalize();
 
-                self.worker_response.insert((rep, 0))
-            }
-        };
-
-        match rep.responses.tag {
-            worker_message_types::EXECUTION_RESPONSE => {
                 assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
-                assert!(*index < rep.responses.num_transaction_responses as usize);
-
-                // Construct a transaction pointer.
-                let tx = self
+                let batch = self
                     .allocator
                     .ptr_from_offset(rep.batch.transactions_offset)
                     .cast::<SharableTransactionRegion>();
+                let rep = match rep.responses.tag {
+                    worker_message_types::EXECUTION_RESPONSE => WorkerResponseBatch::Execution(
+                        self.allocator
+                            .ptr_from_offset(rep.responses.transaction_responses_offset)
+                            .cast(),
+                    ),
+                    worker_message_types::CHECK_RESPONSE => WorkerResponseBatch::Check(
+                        self.allocator
+                            .ptr_from_offset(rep.responses.transaction_responses_offset)
+                            .cast(),
+                    ),
+                    _ => panic!(),
+                };
+
+                self.worker_response.insert((batch, rep, 0))
+            }
+        };
+
+        match rep {
+            WorkerResponseBatch::Execution(rep) => {
                 // SAFETY
                 // - Trust Agave to have correctly constructed this region for us.
                 let tx = unsafe {
-                    let region = tx.add(*index).read();
+                    let region = batch.add(*index).read();
 
                     TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
                 };
 
-                // Read the response.
-                let rep = self
-                    .allocator
-                    .ptr_from_offset(rep.responses.transaction_responses_offset)
-                    .cast::<CheckResponse>();
                 // SAFETY
                 // - Trust Agave to have correctly constructed this region for us.
                 let rep = unsafe { rep.add(*index).read() };
 
-                // TODO: Resolved pubkeys
-                cb((todo!(), &tx, WorkerResponse::Check(rep, None)));
+                if cb((
+                    todo!("Recover transaction ID from meta"),
+                    &tx,
+                    WorkerResponse::Execute(rep),
+                )) == TxDecision::Drop
+                {
+                    todo!("Drop TX");
+                }
 
                 true
             }
-            worker_message_types::CHECK_RESPONSE => todo!(),
+            WorkerResponseBatch::Check(rep) => {
+                // SAFETY
+                // - Trust Agave to have correctly constructed this region for us.
+                let tx = unsafe {
+                    let region = batch.add(*index).read();
+
+                    TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
+                };
+
+                // SAFETY
+                // - Trust Agave to have correctly constructed this region for us.
+                let rep = unsafe { rep.add(*index).read() };
+
+                if cb((
+                    todo!("Recover transaction ID from meta"),
+                    &tx,
+                    WorkerResponse::Check(rep, None),
+                )) == TxDecision::Drop
+                {
+                    todo!("Drop TX & Pubkeys");
+                }
+
+                true
+            }
             _ => panic!(),
         }
     }
@@ -200,4 +235,9 @@ impl Worker for SchedulerWorker {
 
         self.0.pack_to_worker.capacity() - self.0.pack_to_worker.len()
     }
+}
+
+enum WorkerResponseBatch {
+    Execution(NonNull<ExecutionResponse>),
+    Check(NonNull<CheckResponse>),
 }
