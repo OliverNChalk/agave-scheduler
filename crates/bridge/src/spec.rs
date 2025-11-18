@@ -1,6 +1,7 @@
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::ProgressMessage;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use solana_fee::FeeFeatures;
 
@@ -59,8 +60,8 @@ pub trait Worker {
 }
 
 pub enum WorkerResponse<'a> {
-    Check(&'a CheckResponse),
-    Execute(&'a ExecutionResponse),
+    Check(CheckResponse, Option<&'a PubkeysPtr>),
+    Execute(ExecutionResponse),
 }
 
 slotmap::new_key_type! {

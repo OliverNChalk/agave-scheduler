@@ -1,13 +1,17 @@
 use agave_feature_set::FeatureSet;
-use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
-use agave_scheduler_bindings::{ProgressMessage, TpuToPackMessage};
+use agave_scheduler_bindings::worker_message_types::CheckResponse;
+use agave_scheduler_bindings::{
+    ProgressMessage, SharableTransactionRegion, TpuToPackMessage, WorkerToPackMessage,
+    worker_message_types,
+};
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
-use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_scheduling_utils::responses_region::CheckResponsesPtr;
+use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
-use crate::{Bridge, RuntimeState, TransactionId, TxDecision, Worker};
+use crate::{Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerResponse};
 
 pub struct SchedulerBindings {
     allocator: Allocator,
@@ -18,6 +22,7 @@ pub struct SchedulerBindings {
     progress: ProgressMessage,
     runtime: RuntimeState,
     transactions: SlotMap<TransactionId, ()>,
+    worker_response: Option<(WorkerToPackMessage, usize)>,
 }
 
 impl SchedulerBindings {
@@ -49,6 +54,7 @@ impl SchedulerBindings {
                 burn_percent: 50,
             },
             transactions: SlotMap::default(),
+            worker_response: None,
         }
     }
 }
@@ -107,9 +113,56 @@ impl Bridge for SchedulerBindings {
     fn pop_worker(
         &mut self,
         worker: usize,
-        cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)) -> TxDecision,
+        mut cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)) -> TxDecision,
     ) -> bool {
-        todo!()
+        let (rep, index) = match &mut self.worker_response {
+            Some(in_progress) => in_progress,
+            None => {
+                self.workers[worker].0.worker_to_pack.sync();
+                let Some(rep) = self.workers[worker].0.worker_to_pack.try_read().copied() else {
+                    return false;
+                };
+                self.workers[worker].0.worker_to_pack.finalize();
+
+                self.worker_response.insert((rep, 0))
+            }
+        };
+
+        match rep.responses.tag {
+            worker_message_types::EXECUTION_RESPONSE => {
+                assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
+                assert!(*index < rep.responses.num_transaction_responses as usize);
+
+                // Construct a transaction pointer.
+                let tx = self
+                    .allocator
+                    .ptr_from_offset(rep.batch.transactions_offset)
+                    .cast::<SharableTransactionRegion>();
+                // SAFETY
+                // - Trust Agave to have correctly constructed this region for us.
+                let tx = unsafe {
+                    let region = tx.add(*index).read();
+
+                    TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
+                };
+
+                // Read the response.
+                let rep = self
+                    .allocator
+                    .ptr_from_offset(rep.responses.transaction_responses_offset)
+                    .cast::<CheckResponse>();
+                // SAFETY
+                // - Trust Agave to have correctly constructed this region for us.
+                let rep = unsafe { rep.add(*index).read() };
+
+                // TODO: Resolved pubkeys
+                cb((todo!(), &tx, WorkerResponse::Check(rep, None)));
+
+                true
+            }
+            worker_message_types::CHECK_RESPONSE => todo!(),
+            _ => panic!(),
+        }
     }
 
     fn schedule_check(
