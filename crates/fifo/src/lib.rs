@@ -55,9 +55,14 @@ impl FifoScheduler {
         }
 
         // Ingest a bounded amount of new transactions.
+        let handle_tx = |(id, _)| {
+            self.check_queue.push_back(id);
+
+            TpuDecision::Keep
+        };
         match is_leader {
-            true => self.core.drain_tpu(|tx| todo!(), 128),
-            false => self.core.drain_tpu(|tx| todo!(), 1024),
+            true => self.core.drain_tpu(handle_tx, 128),
+            false => self.core.drain_tpu(handle_tx, 1024),
         }
 
         self.schedule();
@@ -114,7 +119,11 @@ impl SchedulerCore {
         todo!()
     }
 
-    fn drain_tpu(&mut self, on_tpu: impl FnMut(TransactionPtr) -> TpuDecision, max_count: usize) {
+    fn drain_tpu(
+        &mut self,
+        on_tpu: impl FnMut((TransactionId, TransactionPtr)) -> TpuDecision,
+        max_count: usize,
+    ) {
         todo!()
     }
 
@@ -161,6 +170,6 @@ impl Worker {
 struct TransactionId;
 
 enum TpuDecision {
-    Store,
+    Keep,
     Drop,
 }
