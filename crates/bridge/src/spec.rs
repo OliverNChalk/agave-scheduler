@@ -8,7 +8,7 @@ pub trait Bridge {
     type Worker: Worker;
 
     fn progress(&self) -> &ProgressMessage;
-    fn worker(&mut self, id: WorkerId) -> &mut Self::Worker;
+    fn worker(&mut self, id: usize) -> &mut Self::Worker;
     fn drain_progress(&mut self);
     fn drain_tpu(
         &mut self,
@@ -25,14 +25,14 @@ pub trait Bridge {
     ) -> bool;
     fn schedule_check(
         &mut self,
-        worker: WorkerId,
+        worker: usize,
         batch: &[TransactionId],
         max_working_slot: u64,
         flags: u16,
     );
     fn schedule_execute(
         &mut self,
-        worker: WorkerId,
+        worker: usize,
         batch: &[TransactionId],
         max_working_slot: u64,
         flags: u16,
@@ -54,9 +54,6 @@ pub struct RuntimeState {
     pub lamports_per_signature: u64,
     pub burn_percent: u64,
 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct WorkerId;
 
 pub struct TransactionId;
 

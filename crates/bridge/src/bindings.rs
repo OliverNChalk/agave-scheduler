@@ -2,18 +2,17 @@ use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{ProgressMessage, TpuToPackMessage};
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
-use agave_scheduling_utils::handshake::server::AgaveWorkerSession;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use rts_alloc::Allocator;
 use solana_fee::FeeFeatures;
 
-use crate::{Bridge, RuntimeState, TpuDecision, TransactionId, Worker, WorkerId};
+use crate::{Bridge, RuntimeState, TpuDecision, TransactionId, Worker};
 
 pub struct SchedulerBindings {
     allocator: Allocator,
     tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
     progress_tracker: shaq::Consumer<ProgressMessage>,
-    workers: Vec<ClientWorkerSession>,
+    workers: Vec<SchedulerWorker>,
 
     progress: ProgressMessage,
     runtime: RuntimeState,
@@ -30,7 +29,7 @@ impl SchedulerBindings {
             allocator: allocators.remove(0),
             tpu_to_pack,
             progress_tracker,
-            workers,
+            workers: workers.into_iter().map(SchedulerWorker).collect(),
 
             progress: ProgressMessage {
                 leader_state: 0,
@@ -52,18 +51,22 @@ impl SchedulerBindings {
 }
 
 impl Bridge for SchedulerBindings {
-    type Worker = WorkerSession;
+    type Worker = SchedulerWorker;
 
     fn progress(&self) -> &ProgressMessage {
         &self.progress
     }
 
-    fn worker(&mut self, id: WorkerId) -> &mut Self::Worker {
-        todo!()
+    fn worker(&mut self, id: usize) -> &mut Self::Worker {
+        &mut self.workers[id]
     }
 
     fn drain_progress(&mut self) {
-        todo!()
+        self.progress_tracker.sync();
+        while let Some(msg) = self.progress_tracker.try_read() {
+            self.progress = *msg;
+        }
+        self.progress_tracker.finalize();
     }
 
     fn drain_tpu(
@@ -90,7 +93,7 @@ impl Bridge for SchedulerBindings {
 
     fn schedule_check(
         &mut self,
-        worker: WorkerId,
+        worker: usize,
         batch: &[TransactionId],
         max_working_slot: u64,
         flags: u16,
@@ -100,7 +103,7 @@ impl Bridge for SchedulerBindings {
 
     fn schedule_execute(
         &mut self,
-        worker: WorkerId,
+        worker: usize,
         batch: &[TransactionId],
         max_working_slot: u64,
         flags: u16,
@@ -109,9 +112,9 @@ impl Bridge for SchedulerBindings {
     }
 }
 
-pub struct WorkerSession(AgaveWorkerSession);
+pub struct SchedulerWorker(ClientWorkerSession);
 
-impl Worker for WorkerSession {
+impl Worker for SchedulerWorker {
     fn len(&mut self) -> usize {
         self.0.pack_to_worker.sync();
 

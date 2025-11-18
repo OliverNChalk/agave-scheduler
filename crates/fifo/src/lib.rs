@@ -5,7 +5,7 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
-use bridge::{Bridge, TpuDecision, TransactionId, Worker, WorkerId};
+use bridge::{Bridge, TpuDecision, TransactionId, Worker};
 
 // TODO:
 //
@@ -18,8 +18,8 @@ use bridge::{Bridge, TpuDecision, TransactionId, Worker, WorkerId};
 // - Confirm all tests still work.
 // - PR it.
 
-const CHECK_WORKER: WorkerId = WorkerId;
-const EXECUTE_WORKER: WorkerId = WorkerId;
+const CHECK_WORKER: usize = 0;
+const EXECUTE_WORKER: usize = 1;
 
 pub struct FifoScheduler<B> {
     bridge: B,
