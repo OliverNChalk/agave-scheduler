@@ -1,5 +1,5 @@
 [package]
-name = "ferrari"
+name = "fifo"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
