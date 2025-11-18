@@ -5,7 +5,7 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
-use bridge::{Bridge, TpuDecision, TransactionId, Worker};
+use bridge::{Bridge, TransactionId, TxDecision, Worker, WorkerResponse};
 
 // TODO:
 //
@@ -47,7 +47,11 @@ where
         self.bridge.drain_progress();
 
         // Drain check responses.
-        while self.bridge.pop_check(|id, _, rep| {
+        while self.bridge.pop_worker(CHECK_WORKER, |(id, _, rep)| {
+            let WorkerResponse::Check(rep) = rep else {
+                panic!();
+            };
+
             // TODO: Dedupe with greedy & make this friendlier.
             let parsing_failed =
                 rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
@@ -56,17 +60,20 @@ where
                 != 0;
 
             match parsing_failed || status_failed {
-                true => TpuDecision::Drop,
+                true => TxDecision::Drop,
                 false => {
                     self.execute_queue.push_back(id);
 
-                    TpuDecision::Keep
+                    TxDecision::Keep
                 }
             }
         }) {}
 
         // Drain execute responses.
-        while self.bridge.pop_execute(|_, _, _| TpuDecision::Drop) {}
+        while self
+            .bridge
+            .pop_worker(EXECUTE_WORKER, |(..)| TxDecision::Drop)
+        {}
 
         // Ingest a bounded amount of new transactions.
         let max_count = match self.bridge.progress().leader_state == IS_LEADER {
@@ -77,7 +84,7 @@ where
             |(id, _)| {
                 self.check_queue.push_back(id);
 
-                TpuDecision::Keep
+                TxDecision::Keep
             },
             max_count,
         );

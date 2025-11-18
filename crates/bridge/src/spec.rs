@@ -1,7 +1,6 @@
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::ProgressMessage;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
-use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use solana_fee::FeeFeatures;
 
@@ -16,24 +15,14 @@ pub trait Bridge {
 
     fn drain_tpu(
         &mut self,
-        cb: impl FnMut((TransactionId, &TransactionPtr)) -> TpuDecision,
+        cb: impl FnMut((TransactionId, &TransactionPtr)) -> TxDecision,
         max_count: usize,
     );
 
     fn pop_worker(
         &mut self,
         worker: usize,
-        cb: impl FnMut((TransactionId, &TransactionPtr, WorkerResponse)),
-    ) -> bool;
-
-    fn pop_check(
-        &mut self,
-        cb: impl FnMut(TransactionId, &TransactionPtr, &CheckResponse) -> TpuDecision,
-    ) -> bool;
-
-    fn pop_execute(
-        &mut self,
-        cb: impl FnMut(TransactionId, &TransactionPtr, &ExecutionResponse) -> TpuDecision,
+        cb: impl FnMut((TransactionId, &TransactionPtr, WorkerResponse)) -> TxDecision,
     ) -> bool;
 
     fn schedule_check(
@@ -70,8 +59,8 @@ pub trait Worker {
 }
 
 pub enum WorkerResponse<'a> {
-    Check(&'a CheckResponsesPtr),
-    Execute(&'a ExecutionResponsesPtr),
+    Check(&'a CheckResponse),
+    Execute(&'a ExecutionResponse),
 }
 
 slotmap::new_key_type! {
@@ -79,7 +68,7 @@ slotmap::new_key_type! {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TpuDecision {
+pub enum TxDecision {
     Keep,
     Drop,
 }

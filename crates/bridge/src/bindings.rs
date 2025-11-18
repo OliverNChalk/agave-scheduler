@@ -7,7 +7,7 @@ use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
-use crate::{Bridge, RuntimeState, TpuDecision, TransactionId, Worker};
+use crate::{Bridge, RuntimeState, TransactionId, TxDecision, Worker};
 
 pub struct SchedulerBindings {
     allocator: Allocator,
@@ -74,7 +74,7 @@ impl Bridge for SchedulerBindings {
 
     fn drain_tpu(
         &mut self,
-        mut cb: impl FnMut((TransactionId, &TransactionPtr)) -> TpuDecision,
+        mut cb: impl FnMut((TransactionId, &TransactionPtr)) -> TxDecision,
         max_count: usize,
     ) {
         self.tpu_to_pack.sync();
@@ -93,7 +93,7 @@ impl Bridge for SchedulerBindings {
             let id = self.transactions.insert(());
 
             // Remove & free the TX if the scheduler doesn't want it.
-            if cb((id, &tx)) == TpuDecision::Drop {
+            if cb((id, &tx)) == TxDecision::Drop {
                 self.transactions.remove(id).unwrap();
                 // SAFETY:
                 // - We own this pointer exclusively, thus it is safe to free.
@@ -107,24 +107,7 @@ impl Bridge for SchedulerBindings {
     fn pop_worker(
         &mut self,
         worker: usize,
-        cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)),
-    ) -> bool {
-        todo!()
-    }
-
-    // OLI: To support this API we would need to fully drain all workers, which is
-    // ... retarded. Instead we need to just let the scheduler poll a specific
-    // worker id. This of course means that the cb must take an enum or something...
-    fn pop_check(
-        &mut self,
-        cb: impl FnMut(TransactionId, &TransactionPtr, &CheckResponse) -> TpuDecision,
-    ) -> bool {
-        todo!()
-    }
-
-    fn pop_execute(
-        &mut self,
-        cb: impl FnMut(TransactionId, &TransactionPtr, &ExecutionResponse) -> TpuDecision,
+        cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)) -> TxDecision,
     ) -> bool {
         todo!()
     }
