@@ -372,10 +372,9 @@ impl GreedyScheduler {
         let mut evicted = 0;
         for ((_, id), rep) in batch.iter().zip(responses.iter().copied()) {
             let parsing_failed =
-                rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
-            let status_failed = rep.status_check_flags
-                & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
-                != 0;
+                rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
+            let status_ok = status_check_flags::REQUESTED | status_check_flags::PERFORMED;
+            let status_failed = rep.status_check_flags & !status_ok != 0;
             if parsing_failed || status_failed {
                 // SAFETY:
                 // - TX was previously allocated with this allocator.
@@ -391,12 +390,18 @@ impl GreedyScheduler {
             }
 
             // Sanity check the flags.
-            assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0);
-            assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0);
-            assert_eq!(rep.resolve_flags, resolve_flags::REQUESTED | resolve_flags::PERFORMED);
+            assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
+            // OLI: This is somehow still not getting performed even with a u64::MAX expiry?
+            assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
+            assert_eq!(
+                rep.resolve_flags,
+                resolve_flags::REQUESTED | resolve_flags::PERFORMED,
+                "{rep:?}"
+            );
             assert_eq!(
                 rep.fee_payer_balance_flags,
-                fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED
+                fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED,
+                "{rep:?}"
             );
 
             // Evict lowest priority if at capacity.
