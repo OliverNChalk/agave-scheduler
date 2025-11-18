@@ -174,6 +174,7 @@ impl GreedyScheduler {
                     _ => panic!(),
                 }
             }
+            worker.worker_to_pack.finalize();
         }
     }
 
@@ -216,6 +217,7 @@ impl GreedyScheduler {
                 },
             }
         }
+        queues.tpu_to_pack.finalize();
 
         // Commit metrics.
         self.metrics.recv_ok.increment(ok);
@@ -239,7 +241,7 @@ impl GreedyScheduler {
                         | check_flags::STATUS_CHECKS
                         | check_flags::LOAD_FEE_PAYER_BALANCE
                         | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-                    max_working_slot: self.progress.current_slot + 1,
+                    max_working_slot: u64::MAX,
                     batch: Self::collect_batch(&self.allocator, || {
                         self.unchecked
                             .pop_max()
@@ -1018,6 +1020,7 @@ mod tests {
                     worker.pack_to_worker.sync();
 
                     std::iter::from_fn(move || {
+                        // TODO: Missing finalize call.
                         worker.pack_to_worker.try_read().map(|msg| (i, *msg))
                     })
                 })

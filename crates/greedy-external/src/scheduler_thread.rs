@@ -26,7 +26,7 @@ impl SchedulerThread {
                         tpu_to_pack_capacity: 2usize.pow(16),
                         progress_tracker_capacity: 128,
                         pack_to_worker_capacity: 128,
-                        worker_to_pack_capacity: 128,
+                        worker_to_pack_capacity: 256,
                         flags: 0,
                     },
                     Duration::from_secs(1),
