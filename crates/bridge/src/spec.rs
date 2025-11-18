@@ -12,7 +12,7 @@ pub trait Bridge {
     fn drain_progress(&mut self);
     fn drain_tpu(
         &mut self,
-        cb: impl FnMut((TransactionId, TransactionPtr)) -> TpuDecision,
+        cb: impl FnMut((TransactionId, &TransactionPtr)) -> TpuDecision,
         max_count: usize,
     );
     fn pop_check(
@@ -55,8 +55,11 @@ pub struct RuntimeState {
     pub burn_percent: u64,
 }
 
-pub struct TransactionId;
+slotmap::new_key_type! {
+    pub struct TransactionId;
+}
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum TpuDecision {
     Keep,
     Drop,

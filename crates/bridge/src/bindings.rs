@@ -4,6 +4,7 @@ use agave_scheduler_bindings::{ProgressMessage, TpuToPackMessage};
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use rts_alloc::Allocator;
+use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
 use crate::{Bridge, RuntimeState, TpuDecision, TransactionId, Worker};
@@ -16,6 +17,7 @@ pub struct SchedulerBindings {
 
     progress: ProgressMessage,
     runtime: RuntimeState,
+    transactions: SlotMap<TransactionId, ()>,
 }
 
 impl SchedulerBindings {
@@ -46,6 +48,7 @@ impl SchedulerBindings {
                 lamports_per_signature: 5000,
                 burn_percent: 50,
             },
+            transactions: SlotMap::default(),
         }
     }
 }
@@ -71,10 +74,34 @@ impl Bridge for SchedulerBindings {
 
     fn drain_tpu(
         &mut self,
-        cb: impl FnMut((TransactionId, TransactionPtr)) -> TpuDecision,
+        mut cb: impl FnMut((TransactionId, &TransactionPtr)) -> TpuDecision,
         max_count: usize,
     ) {
-        todo!()
+        self.tpu_to_pack.sync();
+
+        let additional = std::cmp::min(self.tpu_to_pack.len(), max_count);
+        for _ in 0..additional {
+            let msg = self.tpu_to_pack.try_read().unwrap();
+
+            // SAFETY:
+            // - Trust Agave to have properly transferred ownership to use & not to
+            //   free/access this.
+            // - We are only creating a single exclusive pointer.
+            let tx = unsafe {
+                TransactionPtr::from_sharable_transaction_region(&msg.transaction, &self.allocator)
+            };
+            let id = self.transactions.insert(());
+
+            // Remove & free the TX if the scheduler doesn't want it.
+            if cb((id, &tx)) == TpuDecision::Drop {
+                self.transactions.remove(id).unwrap();
+                // SAFETY:
+                // - We own this pointer exclusively, thus it is safe to free.
+                unsafe { tx.free(&self.allocator) };
+            }
+        }
+
+        self.tpu_to_pack.finalize();
     }
 
     fn pop_check(
