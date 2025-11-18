@@ -1,0 +1,39 @@
+[package]
+name = "ferrari"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agave-feature-set = { workspace = true, features = ["agave-unstable-api"] }
+agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
+agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
+agave-transaction-view.workspace = true
+hashbrown.workspace = true
+metrics.workspace = true
+min-max-heap.workspace = true
+rts-alloc.workspace = true
+shaq.workspace = true
+slotmap.workspace = true
+solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
+solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
+solana-fee = { workspace = true, features = ["agave-unstable-api"] }
+solana-fee-structure.workspace = true
+solana-pubkey.workspace = true
+solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
+solana-svm-transaction.workspace = true
+solana-transaction.workspace = true
+static_assertions.workspace = true
+
+[dev-dependencies]
+bincode.workspace = true
+solana-compute-budget-interface.workspace = true
+solana-hash.workspace = true
+solana-keypair.workspace = true
+solana-message.workspace = true
+solana-system-transaction.workspace = true
+solana-transaction = { workspace = true, features = ["bincode", "serde"] }

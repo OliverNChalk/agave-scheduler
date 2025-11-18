@@ -1194,6 +1194,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835a3dc7d1ec9e75e2b5fb4ba75396837112d2060b03f7d43bc1897c7f7211da"
 
 [[package]]
+name = "ferrari"
+version = "0.1.0"
+dependencies = [
+ "agave-feature-set",
+ "agave-scheduler-bindings",
+ "agave-scheduling-utils",
+ "agave-transaction-view",
+ "bincode",
+ "hashbrown 0.16.0",
+ "metrics",
+ "min-max-heap",
+ "rts-alloc",
+ "shaq",
+ "slotmap",
+ "solana-compute-budget-instruction",
+ "solana-compute-budget-interface",
+ "solana-cost-model",
+ "solana-fee",
+ "solana-fee-structure",
+ "solana-hash 3.1.0",
+ "solana-keypair",
+ "solana-message",
+ "solana-pubkey 3.0.0",
+ "solana-runtime-transaction",
+ "solana-svm-transaction",
+ "solana-system-transaction",
+ "solana-transaction",
+ "static_assertions",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
