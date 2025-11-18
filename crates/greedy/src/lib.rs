@@ -434,7 +434,7 @@ impl GreedyScheduler {
         // - We exclusively own these containers and have not created any copies.
         unsafe {
             batch.free();
-            responses.free();
+            responses.free(&self.allocator);
         }
 
         // Commit metrics.
