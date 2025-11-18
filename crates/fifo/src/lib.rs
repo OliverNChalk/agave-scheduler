@@ -5,7 +5,7 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
-use bridge::{Bridge, TpuDecision, TransactionId, WorkerId};
+use bridge::{Bridge, TpuDecision, TransactionId, Worker, WorkerId};
 
 // TODO:
 //
@@ -88,7 +88,7 @@ where
 
     fn schedule(&mut self) {
         // Schedule additional checks.
-        while self.bridge.worker(CHECK_WORKER).rem() > 0 {
+        while !self.bridge.worker(CHECK_WORKER).is_empty() {
             self.batch.clear();
             self.batch.extend(
                 std::iter::from_fn(|| self.check_queue.pop_front())

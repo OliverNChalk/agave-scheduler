@@ -2,6 +2,7 @@ use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{ProgressMessage, TpuToPackMessage};
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
+use agave_scheduling_utils::handshake::server::AgaveWorkerSession;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use rts_alloc::Allocator;
 use solana_fee::FeeFeatures;
@@ -51,11 +52,13 @@ impl SchedulerBindings {
 }
 
 impl Bridge for SchedulerBindings {
+    type Worker = WorkerSession;
+
     fn progress(&self) -> &ProgressMessage {
-        todo!()
+        &self.progress
     }
 
-    fn worker(&self, id: WorkerId) -> &Worker {
+    fn worker(&mut self, id: WorkerId) -> &mut Self::Worker {
         todo!()
     }
 
@@ -103,5 +106,21 @@ impl Bridge for SchedulerBindings {
         flags: u16,
     ) {
         todo!()
+    }
+}
+
+pub struct WorkerSession(AgaveWorkerSession);
+
+impl Worker for WorkerSession {
+    fn len(&mut self) -> usize {
+        self.0.pack_to_worker.sync();
+
+        self.0.pack_to_worker.len()
+    }
+
+    fn rem(&mut self) -> usize {
+        self.0.pack_to_worker.sync();
+
+        self.0.pack_to_worker.capacity() - self.0.pack_to_worker.len()
     }
 }

@@ -5,8 +5,10 @@ use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use solana_fee::FeeFeatures;
 
 pub trait Bridge {
+    type Worker: Worker;
+
     fn progress(&self) -> &ProgressMessage;
-    fn worker(&self, id: WorkerId) -> &Worker;
+    fn worker(&mut self, id: WorkerId) -> &mut Self::Worker;
     fn drain_progress(&mut self);
     fn drain_tpu(
         &mut self,
@@ -37,6 +39,15 @@ pub trait Bridge {
     );
 }
 
+pub trait Worker {
+    fn is_empty(&mut self) -> bool {
+        self.len() == 0
+    }
+
+    fn len(&mut self) -> usize;
+    fn rem(&mut self) -> usize;
+}
+
 pub struct RuntimeState {
     pub feature_set: FeatureSet,
     pub fee_features: FeeFeatures,
@@ -46,18 +57,6 @@ pub struct RuntimeState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct WorkerId;
-
-pub struct Worker;
-
-impl Worker {
-    pub fn len(&self) -> usize {
-        todo!()
-    }
-
-    pub fn rem(&self) -> usize {
-        todo!()
-    }
-}
 
 pub struct TransactionId;
 
