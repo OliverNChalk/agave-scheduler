@@ -46,7 +46,11 @@ impl FifoScheduler {
         let is_leader = self.core.progress().leader_state == IS_LEADER;
 
         // Drain check responses.
-        while self.core.pop_check(|id, tx, rep| TpuDecision::Drop) {} // TODO
+        while self.core.pop_check(|id, _, _| {
+            self.execute_queue.push_back(id);
+
+            TpuDecision::Keep
+        }) {}
 
         // Drain execute responses.
         while self.core.pop_execute(|id, tx, rep| TpuDecision::Drop) {} // TODO
@@ -126,14 +130,14 @@ impl SchedulerCore {
 
     fn pop_check(
         &mut self,
-        cb: impl Fn(TransactionId, &TransactionPtr, &CheckResponse) -> TpuDecision,
+        cb: impl FnMut(TransactionId, &TransactionPtr, &CheckResponse) -> TpuDecision,
     ) -> bool {
         todo!()
     }
 
     fn pop_execute(
         &mut self,
-        cb: impl Fn(TransactionId, &TransactionPtr, &ExecutionResponse) -> TpuDecision,
+        cb: impl FnMut(TransactionId, &TransactionPtr, &ExecutionResponse) -> TpuDecision,
     ) -> bool {
         todo!()
     }
