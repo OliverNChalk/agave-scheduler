@@ -2,12 +2,9 @@ use std::collections::VecDeque;
 
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
-    CheckResponse, ExecutionResponse, parsing_and_sanitization_flags, status_check_flags,
+    parsing_and_sanitization_flags, status_check_flags,
 };
-use agave_scheduler_bindings::{
-    IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, pack_message_flags,
-};
-use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
 use bridge::{Bridge, TpuDecision, TransactionId, WorkerId};
 
 // TODO:
@@ -48,7 +45,6 @@ where
     pub fn poll(&mut self) {
         // Drain the progress tracker so we know which slot we're on.
         self.bridge.drain_progress();
-        let is_leader = self.bridge.progress().leader_state == IS_LEADER;
 
         // Drain check responses.
         while self.bridge.pop_check(|id, _, rep| {
@@ -73,7 +69,7 @@ where
         while self.bridge.pop_execute(|_, _, _| TpuDecision::Drop) {}
 
         // Ingest a bounded amount of new transactions.
-        let max_count = match is_leader {
+        let max_count = match self.bridge.progress().leader_state == IS_LEADER {
             true => 128,
             false => 1024,
         };
