@@ -104,6 +104,9 @@ impl Bridge for SchedulerBindings {
         self.tpu_to_pack.finalize();
     }
 
+    // OLI: To support this API we would need to fully drain all workers, which is
+    // ... retarded. Instead we need to just let the scheduler poll a specific
+    // worker id. This of course means that the cb must take an enum or something...
     fn pop_check(
         &mut self,
         cb: impl FnMut(TransactionId, &TransactionPtr, &CheckResponse) -> TpuDecision,
