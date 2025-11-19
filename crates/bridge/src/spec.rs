@@ -23,14 +23,14 @@ pub trait Bridge {
 
     fn tpu_drain(
         &mut self,
-        cb: impl FnMut((TransactionId, &TransactionPtr)) -> TxDecision,
+        cb: impl FnMut(&mut Self, (TransactionId, &TransactionPtr)) -> TxDecision,
         max_count: usize,
     );
 
     fn pop_worker(
         &mut self,
         worker: usize,
-        cb: impl FnMut(WorkerResponse<'_, Self::Meta>) -> TxDecision,
+        cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool;
 
     fn schedule(
