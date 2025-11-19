@@ -230,7 +230,6 @@ impl Bridge for SchedulerBindings {
 
         // SAFETY
         // - We took care to allocate these correctly originally.
-        // - For responses we trust Agave to have correctly allocated the responses.
         let (tx, meta) = unsafe {
             let region = ptrs.transactions.add(ptrs.index).read();
             let tx = TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
