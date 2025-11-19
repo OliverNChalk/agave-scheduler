@@ -22,7 +22,7 @@ pub struct SchedulerBindings {
     progress: ProgressMessage,
     runtime: RuntimeState,
     transactions: SlotMap<TransactionId, ()>,
-    worker_response: Option<(NonNull<SharableTransactionRegion>, WorkerResponseBatch, usize)>,
+    worker_response: Option<WorkerResponsePointers<TransactionId>>,
 }
 
 impl SchedulerBindings {
@@ -115,7 +115,7 @@ impl Bridge for SchedulerBindings {
         worker: usize,
         mut cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)) -> TxDecision,
     ) -> bool {
-        let (batch, rep, index) = match &mut self.worker_response {
+        let ptrs = match &mut self.worker_response {
             Some(in_progress) => in_progress,
             None => {
                 self.workers[worker].0.worker_to_pack.sync();
@@ -125,11 +125,11 @@ impl Bridge for SchedulerBindings {
                 self.workers[worker].0.worker_to_pack.finalize();
 
                 assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
-                let batch = self
+                let transactions = self
                     .allocator
                     .ptr_from_offset(rep.batch.transactions_offset)
                     .cast::<SharableTransactionRegion>();
-                let rep = match rep.responses.tag {
+                let responses = match rep.responses.tag {
                     worker_message_types::EXECUTION_RESPONSE => WorkerResponseBatch::Execution(
                         self.allocator
                             .ptr_from_offset(rep.responses.transaction_responses_offset)
@@ -143,23 +143,28 @@ impl Bridge for SchedulerBindings {
                     _ => panic!(),
                 };
 
-                self.worker_response.insert((batch, rep, 0))
+                self.worker_response.insert(WorkerResponsePointers {
+                    index: 0,
+                    transactions,
+                    metas: todo!(),
+                    responses,
+                })
             }
         };
 
-        match rep {
+        match ptrs.responses {
             WorkerResponseBatch::Execution(rep) => {
                 // SAFETY
                 // - Trust Agave to have correctly constructed this region for us.
                 let tx = unsafe {
-                    let region = batch.add(*index).read();
+                    let region = ptrs.transactions.add(ptrs.index).read();
 
                     TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
                 };
 
                 // SAFETY
                 // - Trust Agave to have correctly constructed this region for us.
-                let rep = unsafe { rep.add(*index).read() };
+                let rep = unsafe { rep.add(ptrs.index).read() };
 
                 if cb((
                     todo!("Recover transaction ID from meta"),
@@ -176,14 +181,14 @@ impl Bridge for SchedulerBindings {
                 // SAFETY
                 // - Trust Agave to have correctly constructed this region for us.
                 let tx = unsafe {
-                    let region = batch.add(*index).read();
+                    let region = ptrs.transactions.add(ptrs.index).read();
 
                     TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
                 };
 
                 // SAFETY
                 // - Trust Agave to have correctly constructed this region for us.
-                let rep = unsafe { rep.add(*index).read() };
+                let rep = unsafe { rep.add(ptrs.index).read() };
 
                 if cb((
                     todo!("Recover transaction ID from meta"),
@@ -235,6 +240,13 @@ impl Worker for SchedulerWorker {
 
         self.0.pack_to_worker.capacity() - self.0.pack_to_worker.len()
     }
+}
+
+struct WorkerResponsePointers<M> {
+    index: usize,
+    transactions: NonNull<SharableTransactionRegion>,
+    metas: NonNull<M>,
+    responses: WorkerResponseBatch,
 }
 
 enum WorkerResponseBatch {
