@@ -6,7 +6,7 @@ mod transaction_map;
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
-    self, CheckResponse, fee_payer_balance_flags, not_included_reasons,
+    self, CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
     parsing_and_sanitization_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{
@@ -114,6 +114,7 @@ where
         // Drain responses from workers.
         self.drain_worker_responses(queues);
 
+        /*
         // Ingest a bounded amount of new transactions.
         match is_leader {
             true => self.drain_tpu(queues, 128),
@@ -136,6 +137,7 @@ where
         self.metrics.unchecked_len.set(self.unchecked.len() as f64);
         self.metrics.checked_len.set(self.checked.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
+        */
     }
 
     fn drain_progress(&mut self, queues: &mut GreedyQueues) {
@@ -149,31 +151,14 @@ where
     fn drain_worker_responses(&mut self, queues: &mut GreedyQueues) {
         for worker in 0..5 {
             while self.bridge.pop_worker(worker, |(id, tx, rep)| match rep {
+                WorkerResponse::Unprocessed => TxDecision::Keep,
                 WorkerResponse::Check(rep, keys) => self.on_check(id, todo!(), tx, rep, keys),
-                WorkerResponse::Execute(rep) => self.on_execute(rep),
+                WorkerResponse::Execute(rep) => self.on_execute(id, todo!(), tx, rep),
             }) {}
-
-            worker.worker_to_pack.sync();
-            while let Some(msg) = worker.worker_to_pack.try_read() {
-                match msg.processed_code {
-                    processed_codes::MAX_WORKING_SLOT_EXCEEDED => {
-                        // SAFETY
-                        // - Trust Agave to not have modified/freed this pointer.
-                        unsafe {
-                            self.allocator
-                                .free_offset(msg.responses.transaction_responses_offset);
-                        }
-
-                        continue;
-                    }
-                    processed_codes::PROCESSED => {}
-                    _ => panic!(),
-                }
-            }
-            worker.worker_to_pack.finalize();
         }
     }
 
+    /*
     fn drain_tpu(&mut self, queues: &mut GreedyQueues, max: usize) {
         queues.tpu_to_pack.sync();
 
@@ -342,6 +327,7 @@ where
             worker.pack_to_worker.commit();
         }
     }
+    */
 
     fn on_check(
         &mut self,
@@ -396,55 +382,26 @@ where
         TxDecision::Keep
     }
 
-    fn on_execute(&mut self, msg: &WorkerToPackMessage) {
-        // SAFETY:
-        // - Trust Agave to have allocated the batch/responses properly & told us the
-        //   correct size.
-        // - Use the correct wrapper type (execute response ptr).
-        // - Don't duplicate wrappers so we cannot double free.
-        let (batch, responses) = unsafe {
-            (
-                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                    &msg.batch,
-                    &self.allocator,
-                ),
-                ExecutionResponsesPtr::from_transaction_response_region(
-                    &msg.responses,
-                    &self.allocator,
-                ),
-            )
-        };
+    fn on_execute(
+        &mut self,
+        id: TransactionId,
+        meta: PriorityId,
+        tx: &TransactionPtr,
+        rep: ExecutionResponse,
+    ) -> TxDecision {
+        // Remove in-flight costs.
+        self.cu_in_flight -= meta.cost;
 
-        // Remove in-flight costs and free all transactions.
-        let mut ok = 0;
-        let mut err = 0;
-        for ((tx, id), rep) in batch.iter().zip(responses.iter()) {
-            self.cu_in_flight -= id.cost;
-
-            // SAFETY:
-            // - Trust Agave not to have already freed this transaction as we are the owner.
-            unsafe { tx.free(&self.allocator) };
-
-            // Update metrics.
-            let included = rep.not_included_reason == not_included_reasons::NONE;
-            ok += u64::from(included);
-            err += u64::from(!included);
+        // Update metrics.
+        match rep.not_included_reason == not_included_reasons::NONE {
+            true => self.metrics.execute_ok.increment(1),
+            false => self.metrics.execute_err.increment(1),
         }
 
-        // Free the containers.
-        //
-        // SAFETY:
-        // - We exclusively own these containers.
-        unsafe {
-            batch.free();
-            self.allocator
-                .free_offset(msg.responses.transaction_responses_offset);
-        }
-
-        // Commit metrics.
-        self.metrics.execute_ok.increment(ok);
-        self.metrics.execute_err.increment(err);
+        TxDecision::Drop
     }
+
+    /*
 
     fn collect_batch(
         allocator: &Allocator,
@@ -551,6 +508,7 @@ where
             cost.try_into().unwrap(),
         ))
     }
+    */
 }
 
 struct GreedyMetrics {
