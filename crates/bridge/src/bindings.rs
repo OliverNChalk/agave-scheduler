@@ -3,7 +3,8 @@ use std::ptr::NonNull;
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{
-    ProgressMessage, SharableTransactionRegion, TpuToPackMessage, worker_message_types,
+    MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, SharableTransactionRegion, TpuToPackMessage,
+    worker_message_types,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
@@ -57,6 +58,16 @@ impl SchedulerBindings {
             worker_response: None,
         }
     }
+}
+
+impl SchedulerBindings {
+    // TODO: Duplicated from scheduling_utils::transaction_ptr.
+    const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
+    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
+    #[allow(dead_code, reason = "Invariant assertion")]
+    const TX_BATCH_SIZE_ASSERT: () =
+        assert!(Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE < 4096);
+    const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
 }
 
 impl Bridge for SchedulerBindings {
@@ -124,11 +135,16 @@ impl Bridge for SchedulerBindings {
                 };
                 self.workers[worker].0.worker_to_pack.finalize();
 
+                // Get transaction & meta pointers.
                 assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
                 let transactions = self
                     .allocator
                     .ptr_from_offset(rep.batch.transactions_offset)
                     .cast::<SharableTransactionRegion>();
+                // SAFETY:
+                // - We ensured that this batch was originally allocated to support M.
+                let metas = unsafe { transactions.byte_add(Self::TX_BATCH_META_OFFSET).cast() };
+
                 let responses = match rep.responses.tag {
                     worker_message_types::EXECUTION_RESPONSE => WorkerResponseBatch::Execution(
                         self.allocator
@@ -146,7 +162,7 @@ impl Bridge for SchedulerBindings {
                 self.worker_response.insert(WorkerResponsePointers {
                     index: 0,
                     transactions,
-                    metas: todo!(),
+                    metas,
                     responses,
                 })
             }
@@ -155,23 +171,19 @@ impl Bridge for SchedulerBindings {
         match ptrs.responses {
             WorkerResponseBatch::Execution(rep) => {
                 // SAFETY
-                // - Trust Agave to have correctly constructed this region for us.
-                let tx = unsafe {
+                // - For tx & meta, we took care to allocate these correctly originally.
+                // - For responses we trust Agave to have correctly allocated the responses.
+                let (tx, meta, rep) = unsafe {
                     let region = ptrs.transactions.add(ptrs.index).read();
+                    let tx =
+                        TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
+                    let meta = ptrs.metas.add(ptrs.index).read();
+                    let rep = rep.add(ptrs.index).read();
 
-                    TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
+                    (tx, meta, rep)
                 };
 
-                // SAFETY
-                // - Trust Agave to have correctly constructed this region for us.
-                let rep = unsafe { rep.add(ptrs.index).read() };
-
-                if cb((
-                    todo!("Recover transaction ID from meta"),
-                    &tx,
-                    WorkerResponse::Execute(rep),
-                )) == TxDecision::Drop
-                {
+                if cb((meta, &tx, WorkerResponse::Execute(rep))) == TxDecision::Drop {
                     todo!("Drop TX");
                 }
 
