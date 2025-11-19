@@ -422,7 +422,7 @@ impl GreedyScheduler {
     ) -> Option<(SanitizedTransactionView<&'a TransactionPtr>, u64, u32)> {
         // TODO: Impl `TransactionData` for &TransactionPtr.
         let tx = SanitizedTransactionView::try_new_sanitized(tx, true).ok()?;
-        let tx = RuntimeTransaction::<SanitizedTransactionView<&TransactionPtr>>::try_nae_nae(
+        let tx = RuntimeTransaction::<SanitizedTransactionView<&TransactionPtr>>::try_new(
             tx,
             MessageHash::Compute,
             None,
