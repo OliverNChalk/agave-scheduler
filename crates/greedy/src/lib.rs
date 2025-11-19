@@ -19,7 +19,7 @@ use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
-use bridge::{Bridge, TransactionId, TxDecision, WorkerResponse};
+use bridge::{Bridge, TransactionId, TxDecision, WorkerAction, WorkerResponse};
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -121,10 +121,12 @@ impl GreedyScheduler {
         B: Bridge,
     {
         for worker in 0..5 {
-            while bridge.pop_worker(worker, |(id, tx, rep)| match rep {
-                WorkerResponse::Unprocessed => TxDecision::Keep,
-                WorkerResponse::Check(rep, keys) => self.on_check(id, todo!(), tx, rep, keys),
-                WorkerResponse::Execute(rep) => self.on_execute(id, todo!(), tx, rep),
+            while bridge.pop_worker(worker, |WorkerResponse { key, data, meta, response }| {
+                match response {
+                    WorkerAction::Unprocessed => TxDecision::Keep,
+                    WorkerAction::Check(rep, keys) => self.on_check(key, meta, tx, rep, keys),
+                    WorkerAction::Execute(rep) => self.on_execute(key, meta, tx, rep),
+                }
             }) {
                 if let Some(key) = self.pending_drop.take() {
                     bridge.drop_tx(key);
