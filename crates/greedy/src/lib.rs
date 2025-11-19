@@ -19,7 +19,7 @@ use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
-use bridge::{Bridge, TransactionId, TxDecision, WorkerAction, WorkerResponse};
+use bridge::{Bridge, RuntimeState, TransactionId, TxDecision, WorkerAction, WorkerResponse};
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -90,13 +90,13 @@ impl GreedyScheduler {
         // Drain responses from workers.
         self.drain_worker_responses(bridge);
 
-        /*
         // Ingest a bounded amount of new transactions.
         match is_leader {
-            true => self.drain_tpu(queues, 128),
-            false => self.drain_tpu(queues, 1024),
+            true => self.drain_tpu(bridge, 128),
+            false => self.drain_tpu(bridge, 1024),
         }
 
+        /*
         // Queue additional checks.
         self.schedule_checks(queues);
 
@@ -135,53 +135,43 @@ impl GreedyScheduler {
         }
     }
 
-    /*
-    fn drain_tpu(&mut self, queues: &mut GreedyQueues, max: usize) {
-        queues.tpu_to_pack.sync();
-
-        let additional = std::cmp::min(queues.tpu_to_pack.len(), max);
+    fn drain_tpu<B>(&mut self, bridge: &mut B, max_count: usize)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let additional = std::cmp::min(bridge.tpu_len(), max_count);
         let shortfall = (self.checked.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
 
         // NB: Technically we are evicting more than we need to because not all of
         // `additional` will parse correctly & thus have a priority.
         for _ in 0..shortfall {
             let id = self.unchecked.pop_min().unwrap();
-            // SAFETY:
-            // - Trust Agave to behave correctly and not free these transactions.
-            // - We have not previously freed this transaction.
-            unsafe { self.state.remove(&self.allocator, id.key) };
+
+            bridge.drop_tx(id.key);
         }
         self.metrics.recv_evict.increment(shortfall as u64);
 
         // TODO: Need to dedupe already seen transactions?
 
-        let mut ok = 0;
-        let mut err = 0;
-        for _ in 0..additional {
-            let msg = queues.tpu_to_pack.try_read().unwrap();
-
-            match Self::calculate_priority(&self.runtime, &self.allocator, msg) {
+        bridge.tpu_drain(
+            |(key, tx)| match Self::calculate_priority(bridge.runtime(), tx) {
                 Some((view, priority, cost)) => {
-                    let key = self.state.insert(msg.transaction, view);
                     self.unchecked.push(PriorityId { priority, cost, key });
-                    ok += 1;
-                }
-                // SAFETY:
-                // - Trust Agave to have correctly allocated & trenferred ownership of this
-                //   transaction region to us.
-                None => unsafe {
-                    self.allocator.free_offset(msg.transaction.offset);
-                    err += 1;
-                },
-            }
-        }
-        queues.tpu_to_pack.finalize();
+                    self.metrics.recv_ok.increment(1);
 
-        // Commit metrics.
-        self.metrics.recv_ok.increment(ok);
-        self.metrics.recv_err.increment(err);
+                    TxDecision::Keep
+                }
+                None => {
+                    self.metrics.recv_err.increment(1);
+
+                    TxDecision::Drop
+                }
+            },
+            max_count,
+        );
     }
 
+    /*
     fn schedule_checks(&mut self, queues: &mut GreedyQueues) {
         let queue = &mut queues.workers[0].pack_to_worker;
         queue.sync();
@@ -379,7 +369,6 @@ impl GreedyScheduler {
     }
 
     /*
-
     fn collect_batch(
         allocator: &Allocator,
         mut pop: impl FnMut() -> Option<(PriorityId, SharableTransactionRegion)>,
@@ -426,22 +415,14 @@ impl GreedyScheduler {
             transactions_offset,
         }
     }
+    */
 
     fn calculate_priority(
         runtime: &RuntimeState,
-        allocator: &Allocator,
-        msg: &TpuToPackMessage,
+        tx: &TransactionPtr,
     ) -> Option<(TransactionView<true, TransactionPtr>, u64, u32)> {
-        let tx = SanitizedTransactionView::try_new_sanitized(
-            // SAFETY:
-            // - Trust Agave to have allocated the shared transactin region correctly.
-            // - `SanitizedTransactionView` does not free the allocation on drop.
-            unsafe {
-                TransactionPtr::from_sharable_transaction_region(&msg.transaction, allocator)
-            },
-            true,
-        )
-        .ok()?;
+        // TODO: Impl `TransactionData` for &TransactionPtr.
+        let tx = SanitizedTransactionView::try_new_sanitized(tx, true).ok()?;
         let tx = RuntimeTransaction::<TransactionView<true, TransactionPtr>>::try_from(
             tx,
             MessageHash::Compute,
@@ -485,7 +466,6 @@ impl GreedyScheduler {
             cost.try_into().unwrap(),
         ))
     }
-    */
 }
 
 struct GreedyMetrics {
@@ -527,13 +507,6 @@ impl GreedyMetrics {
             execute_err: counter!("execute_err"),
         }
     }
-}
-
-struct RuntimeState {
-    feature_set: FeatureSet,
-    fee_features: FeeFeatures,
-    lamports_per_signature: u64,
-    burn_percent: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
