@@ -15,11 +15,13 @@ pub trait Bridge {
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
-    fn drop_tx(&mut self, id: TransactionId);
+    fn drop_tx(&mut self, key: TransactionId);
 
     fn drain_progress(&mut self);
 
-    fn drain_tpu(
+    fn tpu_len(&mut self) -> usize;
+
+    fn tpu_drain(
         &mut self,
         cb: impl FnMut((TransactionId, &TransactionPtr)) -> TxDecision,
         max_count: usize,

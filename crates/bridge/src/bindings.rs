@@ -133,8 +133,8 @@ impl<M> Bridge for SchedulerBindings<M> {
         &mut self.workers[id]
     }
 
-    fn drop_tx(&mut self, id: TransactionId) {
-        let state = self.state.remove(id).unwrap();
+    fn drop_tx(&mut self, key: TransactionId) {
+        let state = self.state.remove(key).unwrap();
 
         // SAFETY
         // - We own the allocation exclusively.
@@ -151,7 +151,13 @@ impl<M> Bridge for SchedulerBindings<M> {
         self.progress_tracker.finalize();
     }
 
-    fn drain_tpu(
+    fn tpu_len(&mut self) -> usize {
+        self.tpu_to_pack.sync();
+
+        self.tpu_to_pack.len()
+    }
+
+    fn tpu_drain(
         &mut self,
         mut cb: impl FnMut((TransactionId, &TransactionPtr)) -> TxDecision,
         max_count: usize,
