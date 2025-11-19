@@ -22,7 +22,7 @@ pub struct SchedulerBindings {
     progress: ProgressMessage,
     runtime: RuntimeState,
     transactions: SlotMap<TransactionId, ()>,
-    worker_response: Option<WorkerResponsePointers<TransactionId>>,
+    worker_response: Option<WorkerResponsePointers>,
 }
 
 impl SchedulerBindings {
@@ -242,10 +242,10 @@ impl Worker for SchedulerWorker {
     }
 }
 
-struct WorkerResponsePointers<M> {
+struct WorkerResponsePointers {
     index: usize,
     transactions: NonNull<SharableTransactionRegion>,
-    metas: NonNull<M>,
+    metas: NonNull<TransactionId>,
     responses: WorkerResponseBatch,
 }
 
