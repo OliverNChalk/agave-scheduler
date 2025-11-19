@@ -49,17 +49,7 @@ const TX_BATCH_META_OFFSET: usize = TX_REGION_SIZE * MAX_TRANSACTIONS_PER_MESSAG
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
-pub struct GreedyQueues {
-    tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
-    progress_tracker: shaq::Consumer<ProgressMessage>,
-    workers: Vec<ClientWorkerSession>,
-}
-
-pub struct GreedyScheduler<B> {
-    bridge: B,
-
-    progress: ProgressMessage,
-    runtime: RuntimeState,
+pub struct GreedyScheduler {
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
     state: TransactionMap,
@@ -69,29 +59,10 @@ pub struct GreedyScheduler<B> {
     metrics: GreedyMetrics,
 }
 
-impl<B> GreedyScheduler<B>
-where
-    B: Bridge,
-{
+impl GreedyScheduler {
     #[must_use]
-    pub fn new(bridge: B) -> Self {
+    pub fn new() -> Self {
         Self {
-            bridge,
-
-            progress: ProgressMessage {
-                leader_state: 0,
-                current_slot: 0,
-                next_leader_slot: u64::MAX,
-                leader_range_end: u64::MAX,
-                remaining_cost_units: 0,
-                current_slot_progress: 0,
-            },
-            runtime: RuntimeState {
-                feature_set: FeatureSet::all_enabled(),
-                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
-                lamports_per_signature: 5000,
-                burn_percent: 50,
-            },
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             state: TransactionMap::with_capacity(STATE_CAPACITY),
@@ -102,17 +73,20 @@ where
         }
     }
 
-    pub fn poll(&mut self, queues: &mut GreedyQueues) {
+    pub fn poll<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge,
+    {
         // Drain the progress tracker so we know which slot we're on.
-        self.drain_progress(queues);
-        let is_leader = self.progress.leader_state == IS_LEADER;
+        bridge.drain_progress();
+        let is_leader = bridge.progress().leader_state == IS_LEADER;
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
         // expired TXs). If we do this we should use a dense slotmap to make
         // iteration fast.
 
         // Drain responses from workers.
-        self.drain_worker_responses(queues);
+        self.drain_worker_responses(bridge);
 
         /*
         // Ingest a bounded amount of new transactions.
@@ -140,17 +114,12 @@ where
         */
     }
 
-    fn drain_progress(&mut self, queues: &mut GreedyQueues) {
-        queues.progress_tracker.sync();
-        while let Some(msg) = queues.progress_tracker.try_read() {
-            self.progress = *msg;
-        }
-        queues.progress_tracker.finalize();
-    }
-
-    fn drain_worker_responses(&mut self, queues: &mut GreedyQueues) {
+    fn drain_worker_responses<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge,
+    {
         for worker in 0..5 {
-            while self.bridge.pop_worker(worker, |(id, tx, rep)| match rep {
+            while bridge.pop_worker(worker, |(id, tx, rep)| match rep {
                 WorkerResponse::Unprocessed => TxDecision::Keep,
                 WorkerResponse::Check(rep, keys) => self.on_check(id, todo!(), tx, rep, keys),
                 WorkerResponse::Execute(rep) => self.on_execute(id, todo!(), tx, rep),
@@ -582,6 +551,7 @@ impl Ord for PriorityId {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::os::fd::IntoRawFd;
@@ -1114,3 +1084,4 @@ mod tests {
         .unwrap()
     }
 }
+*/

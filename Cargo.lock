@@ -1497,6 +1497,7 @@ name = "greedy-external"
 version = "0.1.0"
 dependencies = [
  "agave-scheduling-utils",
+ "bridge",
  "clap",
  "futures",
  "greedy",

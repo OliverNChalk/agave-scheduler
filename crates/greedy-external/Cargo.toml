@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
+bridge.workspace = true
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }
 greedy.workspace = true

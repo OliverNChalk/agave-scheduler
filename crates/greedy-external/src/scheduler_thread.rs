@@ -3,13 +3,14 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client};
-use greedy::{GreedyQueues, GreedyScheduler};
+use bridge::SchedulerBindings;
+use greedy::GreedyScheduler;
 use toolbox::shutdown::Shutdown;
 
 pub(crate) struct SchedulerThread {
     shutdown: Shutdown,
     scheduler: GreedyScheduler,
-    queues: GreedyQueues,
+    bridge: SchedulerBindings,
 }
 
 impl SchedulerThread {
@@ -32,16 +33,17 @@ impl SchedulerThread {
                     Duration::from_secs(1),
                 )
                 .unwrap();
-                let (scheduler, queues) = GreedyScheduler::new(session);
+                let bridge = SchedulerBindings::new(session);
+                let scheduler = GreedyScheduler::new();
 
-                SchedulerThread { shutdown, scheduler, queues }.run();
+                SchedulerThread { shutdown, scheduler, bridge }.run();
             })
             .unwrap()
     }
 
     fn run(mut self) {
         while !self.shutdown.is_shutdown() {
-            self.scheduler.poll(&mut self.queues);
+            self.scheduler.poll(&mut self.bridge);
         }
     }
 }
