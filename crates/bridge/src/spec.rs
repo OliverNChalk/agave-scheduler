@@ -7,6 +7,7 @@ use solana_fee::FeeFeatures;
 
 pub trait Bridge {
     type Worker: Worker;
+    type Meta;
 
     fn runtime(&self) -> &RuntimeState;
 
@@ -27,7 +28,7 @@ pub trait Bridge {
     fn pop_worker(
         &mut self,
         worker: usize,
-        cb: impl FnMut((TransactionId, &TransactionPtr, WorkerResponse)) -> TxDecision,
+        cb: impl FnMut(WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool;
 
     fn schedule(
@@ -55,7 +56,14 @@ pub trait Worker {
     fn rem(&mut self) -> usize;
 }
 
-pub enum WorkerResponse<'a> {
+pub struct WorkerResponse<'a, M> {
+    pub key: TransactionId,
+    pub data: &'a TransactionPtr,
+    pub meta: M,
+    pub response: WorkerAction<'a>,
+}
+
+pub enum WorkerAction<'a> {
     Unprocessed,
     Check(CheckResponse, Option<&'a PubkeysPtr>),
     Execute(ExecutionResponse),

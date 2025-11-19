@@ -14,9 +14,11 @@ use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
-use crate::{Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerResponse};
+use crate::{
+    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+};
 
-pub struct SchedulerBindings {
+pub struct SchedulerBindings<M> {
     allocator: Allocator,
     tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
     progress_tracker: shaq::Consumer<ProgressMessage>,
@@ -25,10 +27,18 @@ pub struct SchedulerBindings {
     progress: ProgressMessage,
     runtime: RuntimeState,
     state: SlotMap<TransactionId, TransactionState>,
-    worker_response: Option<WorkerResponsePointers>,
+    worker_response: Option<WorkerResponsePointers<M>>,
 }
 
-impl SchedulerBindings {
+impl<M> SchedulerBindings<M> {
+    // TODO: Duplicated from scheduling_utils::transaction_ptr.
+    const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
+    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
+    const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
+    const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
+    #[allow(dead_code, reason = "Invariant assertion")]
+    const TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
+
     #[must_use]
     pub fn new(
         ClientSession { mut allocators, tpu_to_pack, progress_tracker, workers }: ClientSession,
@@ -60,16 +70,6 @@ impl SchedulerBindings {
             worker_response: None,
         }
     }
-}
-
-impl SchedulerBindings {
-    // TODO: Duplicated from scheduling_utils::transaction_ptr.
-    const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
-    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
-    const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
-    const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
-    #[allow(dead_code, reason = "Invariant assertion")]
-    const TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
 
     fn collect_batch(
         allocator: &Allocator,
@@ -117,8 +117,9 @@ impl SchedulerBindings {
     }
 }
 
-impl Bridge for SchedulerBindings {
+impl<M> Bridge for SchedulerBindings<M> {
     type Worker = SchedulerWorker;
+    type Meta = M;
 
     fn runtime(&self) -> &RuntimeState {
         &self.runtime
@@ -187,7 +188,7 @@ impl Bridge for SchedulerBindings {
     fn pop_worker(
         &mut self,
         worker: usize,
-        mut cb: impl FnMut((TransactionId, &TransactionPtr, crate::WorkerResponse)) -> TxDecision,
+        mut cb: impl FnMut(WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool {
         let ptrs = match &mut self.worker_response {
             Some(in_progress) => in_progress,
@@ -240,7 +241,7 @@ impl Bridge for SchedulerBindings {
 
         // SAFETY
         // - We took care to allocate these correctly originally.
-        let (tx, meta) = unsafe {
+        let (tx, KeyedTransactionMeta { key, meta }) = unsafe {
             let region = ptrs.transactions.add(ptrs.index).read();
             let tx = TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
             let meta = ptrs.metas.add(ptrs.index).read();
@@ -250,7 +251,9 @@ impl Bridge for SchedulerBindings {
 
         match ptrs.responses {
             WorkerResponseBatch::Unprocessed => {
-                if cb((meta, &tx, WorkerResponse::Unprocessed)) == TxDecision::Drop {
+                if cb(WorkerResponse { key, data: &tx, meta, response: WorkerAction::Unprocessed })
+                    == TxDecision::Drop
+                {
                     // SAFETY
                     // - We own `tx` exclusively.
                     unsafe {
@@ -263,8 +266,10 @@ impl Bridge for SchedulerBindings {
                 // - We trust Agave to have correctly allocated the responses.
                 let rep = unsafe { rep.add(ptrs.index).read() };
 
-                if cb((meta, &tx, WorkerResponse::Execute(rep))) == TxDecision::Drop {
-                    self.state.remove(meta).unwrap();
+                if cb(WorkerResponse { key, data: &tx, meta, response: WorkerAction::Execute(rep) })
+                    == TxDecision::Drop
+                {
+                    self.state.remove(key).unwrap();
                     // SAFETY
                     // - We own `tx` exclusively.
                     unsafe {
@@ -285,7 +290,13 @@ impl Bridge for SchedulerBindings {
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
 
-                if cb((meta, &tx, WorkerResponse::Check(rep, keys.as_ref()))) == TxDecision::Drop {
+                if cb(WorkerResponse {
+                    key,
+                    data: &tx,
+                    meta,
+                    response: WorkerAction::Check(rep, keys.as_ref()),
+                }) == TxDecision::Drop
+                {
                     // SAFETY
                     // - We own these pointers/allocations exclusively.
                     unsafe {
@@ -322,6 +333,11 @@ impl Bridge for SchedulerBindings {
     }
 }
 
+struct KeyedTransactionMeta<M> {
+    key: TransactionId,
+    meta: M,
+}
+
 struct TransactionState {
     region: SharableTransactionRegion,
 }
@@ -342,10 +358,10 @@ impl Worker for SchedulerWorker {
     }
 }
 
-struct WorkerResponsePointers {
+struct WorkerResponsePointers<M> {
     index: usize,
     transactions: NonNull<SharableTransactionRegion>,
-    metas: NonNull<TransactionId>,
+    metas: NonNull<KeyedTransactionMeta<M>>,
     responses: WorkerResponseBatch,
 }
 
