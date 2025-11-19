@@ -72,7 +72,7 @@ where
             true => 128,
             false => 1024,
         };
-        self.bridge.drain_tpu(
+        self.bridge.tpu_drain(
             |(id, _)| {
                 self.check_queue.push_back(id);
 
