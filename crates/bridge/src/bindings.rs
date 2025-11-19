@@ -120,6 +120,10 @@ impl SchedulerBindings {
 impl Bridge for SchedulerBindings {
     type Worker = SchedulerWorker;
 
+    fn runtime(&self) -> &RuntimeState {
+        &self.runtime
+    }
+
     fn progress(&self) -> &ProgressMessage {
         &self.progress
     }

@@ -8,6 +8,8 @@ use solana_fee::FeeFeatures;
 pub trait Bridge {
     type Worker: Worker;
 
+    fn runtime(&self) -> &RuntimeState;
+
     fn progress(&self) -> &ProgressMessage;
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
