@@ -123,7 +123,7 @@ impl GreedyScheduler {
             false => self.drain_tpu(queues, 1024),
         }
 
-        // Drain pending checks.
+        // Queue additional checks.
         self.schedule_checks(queues);
 
         // Schedule if we're currently the leader.
@@ -434,8 +434,13 @@ impl GreedyScheduler {
         }
 
         // Free both containers.
-        batch.free();
-        responses.free();
+        //
+        // SAFETY:
+        // - We exclusively own these containers and have not created any copies.
+        unsafe {
+            batch.free();
+            responses.free(&self.allocator);
+        }
 
         // Commit metrics.
         self.metrics.check_ok.increment(ok);
@@ -479,10 +484,11 @@ impl GreedyScheduler {
         }
 
         // Free the containers.
-        batch.free();
+        //
         // SAFETY:
-        // - Trust Agave to have allocated these responses properly.
+        // - We exclusively own these containers.
         unsafe {
+            batch.free();
             self.allocator
                 .free_offset(msg.responses.transaction_responses_offset);
         }

@@ -1,0 +1,18 @@
+[package]
+name = "bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agave-feature-set = { workspace = true, features = ["agave-unstable-api"] }
+agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
+agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
+rts-alloc.workspace = true
+shaq.workspace = true
+slotmap.workspace = true
+solana-fee = { workspace = true, features = ["agave-unstable-api"] }
