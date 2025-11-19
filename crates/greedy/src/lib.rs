@@ -149,7 +149,7 @@ where
     fn drain_worker_responses(&mut self, queues: &mut GreedyQueues) {
         for worker in 0..5 {
             while self.bridge.pop_worker(worker, |(id, tx, rep)| match rep {
-                WorkerResponse::Check(rep, keys) => self.on_check(id, meta, tx, rep, keys),
+                WorkerResponse::Check(rep, keys) => self.on_check(id, todo!(), tx, rep, keys),
                 WorkerResponse::Execute(rep) => self.on_execute(rep),
             }) {}
 
@@ -381,6 +381,7 @@ where
             let id = self.checked.pop_min().unwrap();
 
             // TODO: Remove id from state.
+            todo!("self.bridge.remove(id.key)");
 
             self.metrics.check_evict.increment(1);
         }
