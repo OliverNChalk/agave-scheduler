@@ -55,6 +55,7 @@ pub struct GreedyScheduler {
     state: TransactionMap,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
+    pending_drop: Option<TransactionId>,
 
     metrics: GreedyMetrics,
 }
@@ -68,6 +69,7 @@ impl GreedyScheduler {
             state: TransactionMap::with_capacity(STATE_CAPACITY),
             cu_in_flight: 0,
             schedule_locks: HashMap::default(),
+            pending_drop: None,
 
             metrics: GreedyMetrics::new(),
         }
@@ -123,7 +125,11 @@ impl GreedyScheduler {
                 WorkerResponse::Unprocessed => TxDecision::Keep,
                 WorkerResponse::Check(rep, keys) => self.on_check(id, todo!(), tx, rep, keys),
                 WorkerResponse::Execute(rep) => self.on_execute(id, todo!(), tx, rep),
-            }) {}
+            }) {
+                if let Some(key) = self.pending_drop.take() {
+                    bridge.drop_tx(key);
+                }
+            }
         }
     }
 
@@ -336,7 +342,7 @@ impl GreedyScheduler {
             let id = self.checked.pop_min().unwrap();
 
             // TODO: Remove id from state.
-            todo!("self.bridge.remove(id.key)");
+            assert!(self.pending_drop.replace(id.key).is_none());
 
             self.metrics.check_evict.increment(1);
         }
@@ -533,7 +539,7 @@ struct RuntimeState {
 struct PriorityId {
     priority: u64,
     cost: u32,
-    key: TransactionStateKey,
+    key: TransactionId,
 }
 
 impl PartialOrd for PriorityId {
