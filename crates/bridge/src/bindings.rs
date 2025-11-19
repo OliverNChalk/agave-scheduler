@@ -4,7 +4,7 @@ use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{
     MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
-    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
+    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage, processed_codes,
     worker_message_types,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
@@ -198,17 +198,24 @@ impl Bridge for SchedulerBindings {
                 // - We ensured that this batch was originally allocated to support M.
                 let metas = unsafe { transactions.byte_add(Self::TX_BATCH_META_OFFSET).cast() };
 
-                let responses = match rep.responses.tag {
-                    worker_message_types::EXECUTION_RESPONSE => WorkerResponseBatch::Execution(
-                        self.allocator
-                            .ptr_from_offset(rep.responses.transaction_responses_offset)
-                            .cast(),
-                    ),
-                    worker_message_types::CHECK_RESPONSE => WorkerResponseBatch::Check(
-                        self.allocator
-                            .ptr_from_offset(rep.responses.transaction_responses_offset)
-                            .cast(),
-                    ),
+                let responses = match (rep.processed_code, rep.responses.tag) {
+                    (processed_codes::PROCESSED, worker_message_types::EXECUTION_RESPONSE) => {
+                        WorkerResponseBatch::Execution(
+                            self.allocator
+                                .ptr_from_offset(rep.responses.transaction_responses_offset)
+                                .cast(),
+                        )
+                    }
+                    (processed_codes::PROCESSED, worker_message_types::CHECK_RESPONSE) => {
+                        WorkerResponseBatch::Check(
+                            self.allocator
+                                .ptr_from_offset(rep.responses.transaction_responses_offset)
+                                .cast(),
+                        )
+                    }
+                    (processed_codes::MAX_WORKING_SLOT_EXCEEDED, _) => {
+                        WorkerResponseBatch::Unprocessed
+                    }
                     _ => panic!(),
                 };
 
@@ -221,20 +228,30 @@ impl Bridge for SchedulerBindings {
             }
         };
 
+        // SAFETY
+        // - We took care to allocate these correctly originally.
+        let (tx, meta) = unsafe {
+            let region = ptrs.transactions.add(ptrs.index).read();
+            let tx = TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
+            let meta = ptrs.metas.add(ptrs.index).read();
+
+            (tx, meta)
+        };
+
         match ptrs.responses {
+            WorkerResponseBatch::Unprocessed => {
+                if cb((meta, &tx, WorkerResponse::Unprocessed)) == TxDecision::Drop {
+                    // SAFETY
+                    // - We own `tx` exclusively.
+                    unsafe {
+                        tx.free(&self.allocator);
+                    };
+                }
+            }
             WorkerResponseBatch::Execution(rep) => {
                 // SAFETY
-                // - For tx & meta, we took care to allocate these correctly originally.
-                // - For responses we trust Agave to have correctly allocated the responses.
-                let (tx, meta, rep) = unsafe {
-                    let region = ptrs.transactions.add(ptrs.index).read();
-                    let tx =
-                        TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
-                    let meta = ptrs.metas.add(ptrs.index).read();
-                    let rep = rep.add(ptrs.index).read();
-
-                    (tx, meta, rep)
-                };
+                // - We trust Agave to have correctly allocated the responses.
+                let rep = unsafe { rep.add(ptrs.index).read() };
 
                 if cb((meta, &tx, WorkerResponse::Execute(rep))) == TxDecision::Drop {
                     self.state.remove(meta).unwrap();
@@ -244,22 +261,11 @@ impl Bridge for SchedulerBindings {
                         tx.free(&self.allocator);
                     };
                 }
-
-                true
             }
             WorkerResponseBatch::Check(rep) => {
                 // SAFETY
-                // - For tx & meta, we took care to allocate these correctly originally.
-                // - For responses we trust Agave to have correctly allocated the responses.
-                let (tx, meta, rep) = unsafe {
-                    let region = ptrs.transactions.add(ptrs.index).read();
-                    let tx =
-                        TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
-                    let meta = ptrs.metas.add(ptrs.index).read();
-                    let rep = rep.add(ptrs.index).read();
-
-                    (tx, meta, rep)
-                };
+                // - We trust Agave to have correctly allocated the responses.
+                let rep = unsafe { rep.add(ptrs.index).read() };
 
                 // Load shared pubkeys if there are any.
                 let keys = (rep.resolved_pubkeys.num_pubkeys > 0).then(|| unsafe {
@@ -279,10 +285,10 @@ impl Bridge for SchedulerBindings {
                         }
                     }
                 }
-
-                true
             }
         }
+
+        true
     }
 
     fn schedule(
@@ -334,6 +340,7 @@ struct WorkerResponsePointers {
 }
 
 enum WorkerResponseBatch {
+    Unprocessed,
     Execution(NonNull<ExecutionResponse>),
     Check(NonNull<CheckResponse>),
 }
