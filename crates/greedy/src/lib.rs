@@ -6,8 +6,8 @@ mod transaction_map;
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
-    self, fee_payer_balance_flags, not_included_reasons, parsing_and_sanitization_flags,
-    resolve_flags, status_check_flags,
+    self, CheckResponse, fee_payer_balance_flags, not_included_reasons,
+    parsing_and_sanitization_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
@@ -19,6 +19,7 @@ use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
+use bridge::{Bridge, TransactionId, TxDecision, WorkerResponse};
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -54,8 +55,8 @@ pub struct GreedyQueues {
     workers: Vec<ClientWorkerSession>,
 }
 
-pub struct GreedyScheduler {
-    allocator: Allocator,
+pub struct GreedyScheduler<B> {
+    bridge: B,
 
     progress: ProgressMessage,
     runtime: RuntimeState,
@@ -68,41 +69,37 @@ pub struct GreedyScheduler {
     metrics: GreedyMetrics,
 }
 
-impl GreedyScheduler {
+impl<B> GreedyScheduler<B>
+where
+    B: Bridge,
+{
     #[must_use]
-    pub fn new(
-        ClientSession { mut allocators, tpu_to_pack, progress_tracker, workers }: ClientSession,
-    ) -> (Self, GreedyQueues) {
-        assert_eq!(allocators.len(), 1, "invalid number of allocators");
+    pub fn new(bridge: B) -> Self {
+        Self {
+            bridge,
 
-        (
-            Self {
-                allocator: allocators.remove(0),
-
-                progress: ProgressMessage {
-                    leader_state: 0,
-                    current_slot: 0,
-                    next_leader_slot: u64::MAX,
-                    leader_range_end: u64::MAX,
-                    remaining_cost_units: 0,
-                    current_slot_progress: 0,
-                },
-                runtime: RuntimeState {
-                    feature_set: FeatureSet::all_enabled(),
-                    fee_features: FeeFeatures { enable_secp256r1_precompile: true },
-                    lamports_per_signature: 5000,
-                    burn_percent: 50,
-                },
-                unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                state: TransactionMap::with_capacity(STATE_CAPACITY),
-                cu_in_flight: 0,
-                schedule_locks: HashMap::default(),
-
-                metrics: GreedyMetrics::new(),
+            progress: ProgressMessage {
+                leader_state: 0,
+                current_slot: 0,
+                next_leader_slot: u64::MAX,
+                leader_range_end: u64::MAX,
+                remaining_cost_units: 0,
+                current_slot_progress: 0,
             },
-            GreedyQueues { tpu_to_pack, progress_tracker, workers },
-        )
+            runtime: RuntimeState {
+                feature_set: FeatureSet::all_enabled(),
+                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
+                lamports_per_signature: 5000,
+                burn_percent: 50,
+            },
+            unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            state: TransactionMap::with_capacity(STATE_CAPACITY),
+            cu_in_flight: 0,
+            schedule_locks: HashMap::default(),
+
+            metrics: GreedyMetrics::new(),
+        }
     }
 
     pub fn poll(&mut self, queues: &mut GreedyQueues) {
@@ -150,7 +147,12 @@ impl GreedyScheduler {
     }
 
     fn drain_worker_responses(&mut self, queues: &mut GreedyQueues) {
-        for worker in &mut queues.workers {
+        for worker in 0..5 {
+            while self.bridge.pop_worker(worker, |(id, tx, rep)| match rep {
+                WorkerResponse::Check(rep, keys) => self.on_check(id, meta, tx, rep, keys),
+                WorkerResponse::Execute(rep) => self.on_execute(rep),
+            }) {}
+
             worker.worker_to_pack.sync();
             while let Some(msg) = worker.worker_to_pack.try_read() {
                 match msg.processed_code {
@@ -165,12 +167,6 @@ impl GreedyScheduler {
                         continue;
                     }
                     processed_codes::PROCESSED => {}
-                    _ => panic!(),
-                }
-
-                match msg.responses.tag {
-                    worker_message_types::CHECK_RESPONSE => self.on_check(msg),
-                    worker_message_types::EXECUTION_RESPONSE => self.on_execute(msg),
                     _ => panic!(),
                 }
             }
@@ -347,105 +343,56 @@ impl GreedyScheduler {
         }
     }
 
-    fn on_check(&mut self, msg: &WorkerToPackMessage) {
-        // SAFETY:
-        // - Trust Agave to have allocated the batch/responses properly & told us the
-        //   correct size.
-        // - Use the correct wrapper type (check response ptr).
-        // - Don't duplicate wrappers so we cannot double free.
-        let (batch, responses) = unsafe {
-            (
-                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                    &msg.batch,
-                    &self.allocator,
-                ),
-                CheckResponsesPtr::from_transaction_response_region(
-                    &msg.responses,
-                    &self.allocator,
-                ),
-            )
-        };
-        assert_eq!(batch.len(), responses.len());
+    fn on_check(
+        &mut self,
+        id: TransactionId,
+        meta: PriorityId,
+        tx: &TransactionPtr,
+        rep: CheckResponse,
+        keys: Option<&PubkeysPtr>,
+    ) -> TxDecision {
+        let parsing_failed =
+            rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
+        let resolve_failed = rep.resolve_flags & resolve_flags::FAILED != 0;
+        let status_ok = status_check_flags::REQUESTED | status_check_flags::PERFORMED;
+        let status_failed = rep.status_check_flags & !status_ok != 0;
+        if parsing_failed || resolve_failed || status_failed {
+            self.metrics.check_err.increment(1);
 
-        let mut ok = 0;
-        let mut err = 0;
-        let mut evicted = 0;
-        for ((_, id), rep) in batch.iter().zip(responses.iter().copied()) {
-            let parsing_failed =
-                rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
-            let resolve_failed = rep.resolve_flags & resolve_flags::FAILED != 0;
-            let status_ok = status_check_flags::REQUESTED | status_check_flags::PERFORMED;
-            let status_failed = rep.status_check_flags & !status_ok != 0;
-            if parsing_failed || resolve_failed || status_failed {
-                // SAFETY:
-                // - TX was previously allocated with this allocator.
-                // - Trust Agave to not free this TX while returning it to us.
-                unsafe {
-                    self.state.remove(&self.allocator, id.key);
-                }
-
-                // Update local metric tracker.
-                err += 1;
-
-                continue;
-            }
-
-            // Sanity check the flags.
-            assert_eq!(
-                rep.fee_payer_balance_flags,
-                fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED,
-                "{rep:?}"
-            );
-            assert_eq!(
-                rep.resolve_flags,
-                resolve_flags::REQUESTED | resolve_flags::PERFORMED,
-                "{rep:?}"
-            );
-            assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
-            assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
-
-            // Evict lowest priority if at capacity.
-            if self.checked.len() == CHECKED_CAPACITY {
-                let id = self.checked.pop_min().unwrap();
-                // SAFETY
-                // - We have not previously freed the underlying transaction/pubkey objects.
-                unsafe { self.state.remove(&self.allocator, id.key) };
-
-                evicted += 1;
-            }
-
-            // Insert the new transaction (yes this may be lower priority then what
-            // we just evicted but that's fine).
-            self.checked.push(id);
-
-            // Update the state to include the resolved pubkeys.
-            //
-            // SAFETY
-            // - Trust Agave to have allocated the pubkeys properly & transferred ownership
-            //   to us.
-            if rep.resolved_pubkeys.num_pubkeys > 0 {
-                self.state[id.key].resolved = Some(unsafe {
-                    PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
-                });
-            }
-
-            // Update metric.
-            ok += 1;
+            return TxDecision::Drop;
         }
 
-        // Free both containers.
-        //
-        // SAFETY:
-        // - We exclusively own these containers and have not created any copies.
-        unsafe {
-            batch.free();
-            responses.free(&self.allocator);
+        // Sanity check the flags.
+        assert_eq!(
+            rep.fee_payer_balance_flags,
+            fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED,
+            "{rep:?}"
+        );
+        assert_eq!(
+            rep.resolve_flags,
+            resolve_flags::REQUESTED | resolve_flags::PERFORMED,
+            "{rep:?}"
+        );
+        assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
+        assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
+
+        // Evict lowest priority if at capacity.
+        if self.checked.len() == CHECKED_CAPACITY {
+            let id = self.checked.pop_min().unwrap();
+
+            // TODO: Remove id from state.
+
+            self.metrics.check_evict.increment(1);
         }
 
-        // Commit metrics.
-        self.metrics.check_ok.increment(ok);
-        self.metrics.check_err.increment(err);
-        self.metrics.check_evict.increment(evicted);
+        // Insert the new transaction (yes this may be lower priority then what
+        // we just evicted but that's fine).
+        self.checked.push(meta);
+
+        // Update ok metric.
+        self.metrics.check_ok.increment(1);
+
+        TxDecision::Keep
     }
 
     fn on_execute(&mut self, msg: &WorkerToPackMessage) {

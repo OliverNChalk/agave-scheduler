@@ -1469,6 +1469,7 @@ dependencies = [
  "agave-scheduling-utils",
  "agave-transaction-view",
  "bincode",
+ "bridge",
  "hashbrown 0.16.0",
  "metrics",
  "min-max-heap",
