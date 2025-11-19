@@ -48,7 +48,7 @@ where
 
         // Drain check responses.
         while self.bridge.pop_worker(CHECK_WORKER, |(id, _, rep)| {
-            let WorkerResponse::Check(rep) = rep else {
+            let WorkerResponse::Check(rep, _) = rep else {
                 panic!();
             };
 
