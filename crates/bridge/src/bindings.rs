@@ -113,7 +113,7 @@ impl Bridge for SchedulerBindings {
             if cb((id, &tx)) == TxDecision::Drop {
                 self.transactions.remove(id).unwrap();
                 // SAFETY:
-                // - We own this pointer exclusively, thus it is safe to free.
+                // - We own `tx` exclusively.
                 unsafe { tx.free(&self.allocator) };
             }
         }
@@ -184,7 +184,12 @@ impl Bridge for SchedulerBindings {
                 };
 
                 if cb((meta, &tx, WorkerResponse::Execute(rep))) == TxDecision::Drop {
-                    todo!("Drop TX");
+                    self.transactions.remove(meta).unwrap();
+                    // SAFETY
+                    // - We own `tx` exclusively.
+                    unsafe {
+                        tx.free(&self.allocator);
+                    };
                 }
 
                 true
