@@ -3,7 +3,8 @@ use std::ptr::NonNull;
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{
-    MAX_TRANSACTIONS_PER_MESSAGE, ProgressMessage, SharableTransactionRegion, TpuToPackMessage,
+    MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
+    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
     worker_message_types,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
@@ -23,7 +24,7 @@ pub struct SchedulerBindings {
 
     progress: ProgressMessage,
     runtime: RuntimeState,
-    transactions: SlotMap<TransactionId, ()>,
+    state: SlotMap<TransactionId, TransactionState>,
     worker_response: Option<WorkerResponsePointers>,
 }
 
@@ -55,7 +56,7 @@ impl SchedulerBindings {
                 lamports_per_signature: 5000,
                 burn_percent: 50,
             },
-            transactions: SlotMap::default(),
+            state: SlotMap::default(),
             worker_response: None,
         }
     }
@@ -65,10 +66,55 @@ impl SchedulerBindings {
     // TODO: Duplicated from scheduling_utils::transaction_ptr.
     const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
     const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
-    #[allow(dead_code, reason = "Invariant assertion")]
-    const TX_BATCH_SIZE_ASSERT: () =
-        assert!(Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE < 4096);
     const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
+    const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
+    #[allow(dead_code, reason = "Invariant assertion")]
+    const TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
+
+    fn collect_batch(
+        allocator: &Allocator,
+        state: &SlotMap<TransactionId, TransactionState>,
+        batch: &[TransactionId],
+    ) -> SharableTransactionBatchRegion {
+        assert!(batch.len() <= MAX_TRANSACTIONS_PER_MESSAGE);
+
+        // Allocate a batch that can hold all our transaction pointers.
+        let transactions = allocator.allocate(Self::TX_BATCH_SIZE as u32).unwrap();
+        let transactions_offset = unsafe { allocator.offset(transactions) };
+
+        // Get our two pointers to the TX region & meta region.
+        let tx_ptr = allocator
+            .ptr_from_offset(transactions_offset)
+            .cast::<SharableTransactionRegion>();
+        // SAFETY
+        // - Pointer is guaranteed to not overrun the allocation as we just created it
+        //   with a sufficient size.
+        let meta_ptr = unsafe {
+            allocator
+                .ptr_from_offset(transactions_offset)
+                .byte_add(Self::TX_BATCH_META_OFFSET)
+                .cast::<TransactionId>()
+        };
+
+        // Fill in the batch with transaction pointers.
+        for (i, id) in batch.iter().copied().enumerate() {
+            let tx = &state[id];
+
+            // SAFETY
+            // - We have allocated the transaction batch to support at least
+            //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
+            //   region.
+            unsafe {
+                tx_ptr.add(i).write(tx.region);
+                meta_ptr.add(i).write(id);
+            };
+        }
+
+        SharableTransactionBatchRegion {
+            num_transactions: batch.len().try_into().unwrap(),
+            transactions_offset,
+        }
+    }
 }
 
 impl Bridge for SchedulerBindings {
@@ -108,11 +154,13 @@ impl Bridge for SchedulerBindings {
             let tx = unsafe {
                 TransactionPtr::from_sharable_transaction_region(&msg.transaction, &self.allocator)
             };
-            let id = self.transactions.insert(());
+            let id = self
+                .state
+                .insert(TransactionState { region: msg.transaction });
 
             // Remove & free the TX if the scheduler doesn't want it.
             if cb((id, &tx)) == TxDecision::Drop {
-                self.transactions.remove(id).unwrap();
+                self.state.remove(id).unwrap();
                 // SAFETY:
                 // - We own `tx` exclusively.
                 unsafe { tx.free(&self.allocator) };
@@ -185,7 +233,7 @@ impl Bridge for SchedulerBindings {
                 };
 
                 if cb((meta, &tx, WorkerResponse::Execute(rep))) == TxDecision::Drop {
-                    self.transactions.remove(meta).unwrap();
+                    self.state.remove(meta).unwrap();
                     // SAFETY
                     // - We own `tx` exclusively.
                     unsafe {
@@ -233,25 +281,29 @@ impl Bridge for SchedulerBindings {
         }
     }
 
-    fn schedule_check(
+    fn schedule(
         &mut self,
         worker: usize,
         batch: &[TransactionId],
         max_working_slot: u64,
         flags: u16,
     ) {
-        todo!()
-    }
+        let queue = &mut self.workers[worker].0.pack_to_worker;
 
-    fn schedule_execute(
-        &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
-    ) {
-        todo!()
+        queue.sync();
+        queue
+            .try_write(PackToWorkerMessage {
+                flags,
+                max_working_slot,
+                batch: Self::collect_batch(&self.allocator, &self.state, batch),
+            })
+            .unwrap();
+        queue.commit();
     }
+}
+
+struct TransactionState {
+    region: SharableTransactionRegion,
 }
 
 pub struct SchedulerWorker(ClientWorkerSession);

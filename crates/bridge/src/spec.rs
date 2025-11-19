@@ -26,15 +26,7 @@ pub trait Bridge {
         cb: impl FnMut((TransactionId, &TransactionPtr, WorkerResponse)) -> TxDecision,
     ) -> bool;
 
-    fn schedule_check(
-        &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
-    );
-
-    fn schedule_execute(
+    fn schedule(
         &mut self,
         worker: usize,
         batch: &[TransactionId],

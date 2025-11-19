@@ -101,7 +101,7 @@ where
                 std::iter::from_fn(|| self.check_queue.pop_front())
                     .take(MAX_TRANSACTIONS_PER_MESSAGE),
             );
-            self.bridge.schedule_check(
+            self.bridge.schedule(
                 CHECK_WORKER,
                 &self.batch,
                 u64::MAX,
@@ -121,7 +121,7 @@ where
                 std::iter::from_fn(|| self.execute_queue.pop_front())
                     .take(MAX_TRANSACTIONS_PER_MESSAGE),
             );
-            self.bridge.schedule_execute(
+            self.bridge.schedule(
                 EXECUTE_WORKER,
                 &self.batch,
                 self.bridge.progress().current_slot + 1,
