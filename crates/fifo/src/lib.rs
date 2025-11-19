@@ -7,17 +7,6 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
 use bridge::{Bridge, TransactionId, TxDecision, Worker, WorkerResponse};
 
-// TODO:
-//
-// - Implement dead simple fifo scheduler using mock interface.
-// - Fill in all the methods behind the mock interface by duplicating code from
-//   greedy.
-// - Duplicate basic greedy tests & confirm they still work (not the ordering
-//   ones just the simple ones).
-// - Move core to shared location & dedupe code.
-// - Confirm all tests still work.
-// - PR it.
-
 const CHECK_WORKER: usize = 0;
 const EXECUTE_WORKER: usize = 1;
 
