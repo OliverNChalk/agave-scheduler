@@ -77,7 +77,7 @@ impl GreedyScheduler {
 
     pub fn poll<B>(&mut self, bridge: &mut B)
     where
-        B: Bridge,
+        B: Bridge<Meta = PriorityId>,
     {
         // Drain the progress tracker so we know which slot we're on.
         bridge.drain_progress();
@@ -118,14 +118,14 @@ impl GreedyScheduler {
 
     fn drain_worker_responses<B>(&mut self, bridge: &mut B)
     where
-        B: Bridge,
+        B: Bridge<Meta = PriorityId>,
     {
         for worker in 0..5 {
             while bridge.pop_worker(worker, |WorkerResponse { key, data, meta, response }| {
                 match response {
                     WorkerAction::Unprocessed => TxDecision::Keep,
-                    WorkerAction::Check(rep, keys) => self.on_check(key, meta, tx, rep, keys),
-                    WorkerAction::Execute(rep) => self.on_execute(key, meta, tx, rep),
+                    WorkerAction::Check(rep, keys) => self.on_check(key, meta, data, rep, keys),
+                    WorkerAction::Execute(rep) => self.on_execute(key, meta, data, rep),
                 }
             }) {
                 if let Some(key) = self.pending_drop.take() {
@@ -538,7 +538,7 @@ struct RuntimeState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct PriorityId {
+pub struct PriorityId {
     priority: u64,
     cost: u32,
     key: TransactionId,

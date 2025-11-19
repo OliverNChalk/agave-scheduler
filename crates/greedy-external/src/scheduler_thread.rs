@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client};
 use bridge::SchedulerBindings;
-use greedy::GreedyScheduler;
+use greedy::{GreedyScheduler, PriorityId};
 use toolbox::shutdown::Shutdown;
 
 pub(crate) struct SchedulerThread {
     shutdown: Shutdown,
     scheduler: GreedyScheduler,
-    bridge: SchedulerBindings,
+    bridge: SchedulerBindings<PriorityId>,
 }
 
 impl SchedulerThread {
