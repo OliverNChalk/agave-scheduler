@@ -38,7 +38,7 @@ where
         // Drain check responses.
         while self
             .bridge
-            .pop_worker(CHECK_WORKER, |WorkerResponse { key, response, .. }| {
+            .pop_worker(CHECK_WORKER, |_, WorkerResponse { key, response, .. }| {
                 let WorkerAction::Check(rep, _) = response else {
                     panic!();
                 };
@@ -64,7 +64,7 @@ where
         // Drain execute responses.
         while self
             .bridge
-            .pop_worker(EXECUTE_WORKER, |WorkerResponse { .. }| TxDecision::Drop)
+            .pop_worker(EXECUTE_WORKER, |_, WorkerResponse { .. }| TxDecision::Drop)
         {}
 
         // Ingest a bounded amount of new transactions.
@@ -73,7 +73,7 @@ where
             false => 1024,
         };
         self.bridge.tpu_drain(
-            |(id, _)| {
+            |_, (id, _)| {
                 self.check_queue.push_back(id);
 
                 TxDecision::Keep

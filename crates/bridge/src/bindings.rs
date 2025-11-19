@@ -159,7 +159,7 @@ impl<M> Bridge for SchedulerBindings<M> {
 
     fn tpu_drain(
         &mut self,
-        mut cb: impl FnMut((TransactionId, &TransactionPtr)) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, (TransactionId, &TransactionPtr)) -> TxDecision,
         max_count: usize,
     ) {
         self.tpu_to_pack.sync();
@@ -180,7 +180,7 @@ impl<M> Bridge for SchedulerBindings<M> {
                 .insert(TransactionState { region: msg.transaction });
 
             // Remove & free the TX if the scheduler doesn't want it.
-            if cb((id, &tx)) == TxDecision::Drop {
+            if cb(self, (id, &tx)) == TxDecision::Drop {
                 self.state.remove(id).unwrap();
                 // SAFETY:
                 // - We own `tx` exclusively.
@@ -194,7 +194,7 @@ impl<M> Bridge for SchedulerBindings<M> {
     fn pop_worker(
         &mut self,
         worker: usize,
-        mut cb: impl FnMut(WorkerResponse<'_, Self::Meta>) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool {
         let ptrs = match &mut self.worker_response {
             Some(in_progress) => in_progress,
@@ -257,9 +257,10 @@ impl<M> Bridge for SchedulerBindings<M> {
 
         match ptrs.responses {
             WorkerResponseBatch::Unprocessed => {
-                if cb(WorkerResponse { key, data: &tx, meta, response: WorkerAction::Unprocessed })
-                    == TxDecision::Drop
-                {
+                let rep =
+                    WorkerResponse { key, data: &tx, meta, response: WorkerAction::Unprocessed };
+
+                if cb(self, rep) == TxDecision::Drop {
                     // SAFETY
                     // - We own `tx` exclusively.
                     unsafe {
@@ -271,10 +272,10 @@ impl<M> Bridge for SchedulerBindings<M> {
                 // SAFETY
                 // - We trust Agave to have correctly allocated the responses.
                 let rep = unsafe { rep.add(ptrs.index).read() };
+                let rep =
+                    WorkerResponse { key, data: &tx, meta, response: WorkerAction::Execute(rep) };
 
-                if cb(WorkerResponse { key, data: &tx, meta, response: WorkerAction::Execute(rep) })
-                    == TxDecision::Drop
-                {
+                if cb(self, rep) == TxDecision::Drop {
                     self.state.remove(key).unwrap();
                     // SAFETY
                     // - We own `tx` exclusively.
@@ -296,13 +297,14 @@ impl<M> Bridge for SchedulerBindings<M> {
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
 
-                if cb(WorkerResponse {
+                let rep = WorkerResponse {
                     key,
                     data: &tx,
                     meta,
                     response: WorkerAction::Check(rep, keys.as_ref()),
-                }) == TxDecision::Drop
-                {
+                };
+
+                if cb(self, rep) == TxDecision::Drop {
                     // SAFETY
                     // - We own these pointers/allocations exclusively.
                     unsafe {
