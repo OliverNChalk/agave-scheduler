@@ -54,6 +54,7 @@ pub trait Worker {
 }
 
 pub enum WorkerResponse<'a> {
+    Unprocessed,
     Check(CheckResponse, Option<&'a PubkeysPtr>),
     Execute(ExecutionResponse),
 }
