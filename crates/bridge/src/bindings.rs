@@ -251,17 +251,8 @@ impl Bridge for SchedulerBindings {
             }
             WorkerResponseBatch::Execution(rep) => {
                 // SAFETY
-                // - For tx & meta, we took care to allocate these correctly originally.
-                // - For responses we trust Agave to have correctly allocated the responses.
-                let (tx, meta, rep) = unsafe {
-                    let region = ptrs.transactions.add(ptrs.index).read();
-                    let tx =
-                        TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
-                    let meta = ptrs.metas.add(ptrs.index).read();
-                    let rep = rep.add(ptrs.index).read();
-
-                    (tx, meta, rep)
-                };
+                // - We trust Agave to have correctly allocated the responses.
+                let rep = unsafe { rep.add(ptrs.index).read() };
 
                 if cb((meta, &tx, WorkerResponse::Execute(rep))) == TxDecision::Drop {
                     self.state.remove(meta).unwrap();
@@ -274,17 +265,8 @@ impl Bridge for SchedulerBindings {
             }
             WorkerResponseBatch::Check(rep) => {
                 // SAFETY
-                // - For tx & meta, we took care to allocate these correctly originally.
-                // - For responses we trust Agave to have correctly allocated the responses.
-                let (tx, meta, rep) = unsafe {
-                    let region = ptrs.transactions.add(ptrs.index).read();
-                    let tx =
-                        TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
-                    let meta = ptrs.metas.add(ptrs.index).read();
-                    let rep = rep.add(ptrs.index).read();
-
-                    (tx, meta, rep)
-                };
+                // - We trust Agave to have correctly allocated the responses.
+                let rep = unsafe { rep.add(ptrs.index).read() };
 
                 // Load shared pubkeys if there are any.
                 let keys = (rep.resolved_pubkeys.num_pubkeys > 0).then(|| unsafe {
