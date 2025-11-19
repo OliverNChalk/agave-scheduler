@@ -132,6 +132,16 @@ impl Bridge for SchedulerBindings {
         &mut self.workers[id]
     }
 
+    fn drop_tx(&mut self, id: TransactionId) {
+        let state = self.state.remove(id).unwrap();
+
+        // SAFETY
+        // - We own the allocation exclusively.
+        unsafe {
+            self.allocator.free_offset(state.region.offset);
+        }
+    }
+
     fn drain_progress(&mut self) {
         self.progress_tracker.sync();
         while let Some(msg) = self.progress_tracker.try_read() {
