@@ -7,6 +7,7 @@ use agave_scheduler_bindings::{
     worker_message_types,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
@@ -196,29 +197,39 @@ impl Bridge for SchedulerBindings {
             }
             WorkerResponseBatch::Check(rep) => {
                 // SAFETY
-                // - Trust Agave to have correctly constructed this region for us.
-                let tx = unsafe {
+                // - For tx & meta, we took care to allocate these correctly originally.
+                // - For responses we trust Agave to have correctly allocated the responses.
+                let (tx, meta, rep) = unsafe {
                     let region = ptrs.transactions.add(ptrs.index).read();
+                    let tx =
+                        TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
+                    let meta = ptrs.metas.add(ptrs.index).read();
+                    let rep = rep.add(ptrs.index).read();
 
-                    TransactionPtr::from_sharable_transaction_region(&region, &self.allocator)
+                    (tx, meta, rep)
                 };
 
-                // SAFETY
-                // - Trust Agave to have correctly constructed this region for us.
-                let rep = unsafe { rep.add(ptrs.index).read() };
+                // Load shared pubkeys if there are any.
+                let keys = (rep.resolved_pubkeys.num_pubkeys > 0).then(|| unsafe {
+                    // SAFETY
+                    // - Region exists as `num_pubkeys > 0`.
+                    // - Trust Agave to have allocated this region correctly.
+                    PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
+                });
 
-                if cb((
-                    todo!("Recover transaction ID from meta"),
-                    &tx,
-                    WorkerResponse::Check(rep, None),
-                )) == TxDecision::Drop
-                {
-                    todo!("Drop TX & Pubkeys");
+                if cb((meta, &tx, WorkerResponse::Check(rep, keys.as_ref()))) == TxDecision::Drop {
+                    // SAFETY
+                    // - We own these pointers/allocations exclusively.
+                    unsafe {
+                        tx.free(&self.allocator);
+                        if let Some(keys) = keys {
+                            keys.free(&self.allocator);
+                        }
+                    }
                 }
 
                 true
             }
-            _ => panic!(),
         }
     }
 
