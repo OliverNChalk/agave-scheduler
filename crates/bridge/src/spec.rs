@@ -14,6 +14,8 @@ pub trait Bridge {
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
+    fn drop_tx(&mut self, id: TransactionId);
+
     fn drain_progress(&mut self);
 
     fn drain_tpu(
