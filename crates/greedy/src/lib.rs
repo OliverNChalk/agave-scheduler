@@ -55,7 +55,6 @@ pub struct GreedyScheduler {
     state: TransactionMap,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
-    pending_drop: Option<TransactionId>,
 
     metrics: GreedyMetrics,
 }
@@ -69,7 +68,6 @@ impl GreedyScheduler {
             state: TransactionMap::with_capacity(STATE_CAPACITY),
             cu_in_flight: 0,
             schedule_locks: HashMap::default(),
-            pending_drop: None,
 
             metrics: GreedyMetrics::new(),
         }
@@ -121,17 +119,16 @@ impl GreedyScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         for worker in 0..5 {
-            while bridge.pop_worker(worker, |WorkerResponse { key, data, meta, response }| {
-                match response {
+            while bridge.pop_worker(
+                worker,
+                |bridge, WorkerResponse { key, data, meta, response }| match response {
                     WorkerAction::Unprocessed => TxDecision::Keep,
-                    WorkerAction::Check(rep, keys) => self.on_check(key, meta, data, rep, keys),
+                    WorkerAction::Check(rep, keys) => {
+                        self.on_check(bridge, key, meta, data, rep, keys)
+                    }
                     WorkerAction::Execute(rep) => self.on_execute(key, meta, data, rep),
-                }
-            }) {
-                if let Some(key) = self.pending_drop.take() {
-                    bridge.drop_tx(key);
-                }
-            }
+                },
+            ) {}
         }
     }
 
@@ -154,7 +151,7 @@ impl GreedyScheduler {
         // TODO: Need to dedupe already seen transactions?
 
         bridge.tpu_drain(
-            |(key, tx)| match Self::calculate_priority(bridge.runtime(), tx) {
+            |bridge, (key, tx)| match Self::calculate_priority(bridge.runtime(), tx) {
                 Some((view, priority, cost)) => {
                     self.unchecked.push(PriorityId { priority, cost, key });
                     self.metrics.recv_ok.increment(1);
@@ -296,14 +293,18 @@ impl GreedyScheduler {
     }
     */
 
-    fn on_check(
+    fn on_check<B>(
         &mut self,
+        bridge: &mut B,
         id: TransactionId,
         meta: PriorityId,
         tx: &TransactionPtr,
         rep: CheckResponse,
         keys: Option<&PubkeysPtr>,
-    ) -> TxDecision {
+    ) -> TxDecision
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         let parsing_failed =
             rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
         let resolve_failed = rep.resolve_flags & resolve_flags::FAILED != 0;
@@ -332,9 +333,7 @@ impl GreedyScheduler {
         // Evict lowest priority if at capacity.
         if self.checked.len() == CHECKED_CAPACITY {
             let id = self.checked.pop_min().unwrap();
-
-            // TODO: Remove id from state.
-            assert!(self.pending_drop.replace(id.key).is_none());
+            bridge.drop_tx(id.key);
 
             self.metrics.check_evict.increment(1);
         }
@@ -417,13 +416,13 @@ impl GreedyScheduler {
     }
     */
 
-    fn calculate_priority(
+    fn calculate_priority<'a>(
         runtime: &RuntimeState,
-        tx: &TransactionPtr,
-    ) -> Option<(TransactionView<true, TransactionPtr>, u64, u32)> {
+        tx: &'a TransactionPtr,
+    ) -> Option<(SanitizedTransactionView<&'a TransactionPtr>, u64, u32)> {
         // TODO: Impl `TransactionData` for &TransactionPtr.
         let tx = SanitizedTransactionView::try_new_sanitized(tx, true).ok()?;
-        let tx = RuntimeTransaction::<TransactionView<true, TransactionPtr>>::try_from(
+        let tx = RuntimeTransaction::<SanitizedTransactionView<&TransactionPtr>>::try_nae_nae(
             tx,
             MessageHash::Compute,
             None,
