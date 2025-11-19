@@ -5,7 +5,7 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
-use bridge::{Bridge, TransactionId, TxDecision, Worker, WorkerResponse};
+use bridge::{Bridge, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse};
 
 const CHECK_WORKER: usize = 0;
 const EXECUTE_WORKER: usize = 1;
@@ -36,32 +36,35 @@ where
         self.bridge.drain_progress();
 
         // Drain check responses.
-        while self.bridge.pop_worker(CHECK_WORKER, |(id, _, rep)| {
-            let WorkerResponse::Check(rep, _) = rep else {
-                panic!();
-            };
+        while self
+            .bridge
+            .pop_worker(CHECK_WORKER, |WorkerResponse { key, response, .. }| {
+                let WorkerAction::Check(rep, _) = response else {
+                    panic!();
+                };
 
-            // TODO: Dedupe with greedy & make this friendlier.
-            let parsing_failed =
-                rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
-            let status_failed = rep.status_check_flags
-                & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
-                != 0;
+                // TODO: Dedupe with greedy & make this friendlier.
+                let parsing_failed =
+                    rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
+                let status_failed = rep.status_check_flags
+                    & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
+                    != 0;
 
-            match parsing_failed || status_failed {
-                true => TxDecision::Drop,
-                false => {
-                    self.execute_queue.push_back(id);
+                match parsing_failed || status_failed {
+                    true => TxDecision::Drop,
+                    false => {
+                        self.execute_queue.push_back(key);
 
-                    TxDecision::Keep
+                        TxDecision::Keep
+                    }
                 }
-            }
-        }) {}
+            })
+        {}
 
         // Drain execute responses.
         while self
             .bridge
-            .pop_worker(EXECUTE_WORKER, |(..)| TxDecision::Drop)
+            .pop_worker(EXECUTE_WORKER, |WorkerResponse { .. }| TxDecision::Drop)
         {}
 
         // Ingest a bounded amount of new transactions.
