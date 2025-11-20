@@ -102,21 +102,19 @@ impl GreedyScheduler {
         // Queue additional checks.
         self.schedule_checks(bridge);
 
-        /*
         // Schedule if we're currently the leader.
         if is_leader {
-            self.schedule_execute(queues);
+            self.schedule_execute(bridge);
         }
 
         // Update metrics.
-        self.metrics.slot.set(self.progress.current_slot as f64);
+        self.metrics.slot.set(bridge.progress().current_slot as f64);
         self.metrics
             .next_leader_slot
-            .set(self.progress.next_leader_slot as f64);
+            .set(bridge.progress().next_leader_slot as f64);
         self.metrics.unchecked_len.set(self.unchecked.len() as f64);
         self.metrics.checked_len.set(self.checked.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
-        */
     }
 
     fn drain_worker_responses<B>(&mut self, bridge: &mut B)
