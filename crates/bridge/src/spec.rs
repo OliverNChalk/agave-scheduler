@@ -21,7 +21,7 @@ pub trait Bridge {
 
     fn tx(&self, key: TransactionId) -> &TransactionState;
 
-    fn tx_remove(&mut self, key: TransactionId);
+    fn tx_drop(&mut self, key: TransactionId);
 
     fn drain_progress(&mut self);
 

@@ -1466,7 +1466,6 @@ dependencies = [
 name = "greedy"
 version = "0.1.0"
 dependencies = [
- "agave-feature-set",
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
  "agave-transaction-view",
@@ -1475,9 +1474,6 @@ dependencies = [
  "hashbrown 0.16.0",
  "metrics",
  "min-max-heap",
- "rts-alloc",
- "shaq",
- "slotmap",
  "solana-compute-budget-instruction",
  "solana-compute-budget-interface",
  "solana-cost-model",

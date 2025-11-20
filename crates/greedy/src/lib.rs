@@ -128,7 +128,7 @@ impl GreedyScheduler {
         for _ in 0..shortfall {
             let id = self.unchecked.pop_min().unwrap();
 
-            bridge.tx_remove(id.key);
+            bridge.tx_drop(id.key);
         }
         self.metrics.recv_evict.increment(shortfall as u64);
 
@@ -302,7 +302,7 @@ impl GreedyScheduler {
         // Evict lowest priority if at capacity.
         if self.checked.len() == CHECKED_CAPACITY {
             let id = self.checked.pop_min().unwrap();
-            bridge.tx_remove(id.key);
+            bridge.tx_drop(id.key);
 
             self.metrics.check_evict.increment(1);
         }

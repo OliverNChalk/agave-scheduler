@@ -147,7 +147,7 @@ impl<M> Bridge for SchedulerBindings<M> {
         &self.state[key]
     }
 
-    fn tx_remove(&mut self, key: TransactionId) {
+    fn tx_drop(&mut self, key: TransactionId) {
         let state = self.state.remove(key).unwrap();
 
         // SAFETY
