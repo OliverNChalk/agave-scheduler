@@ -140,19 +140,6 @@ where
             resolved_pubkeys,
         }
     }
-
-    pub fn to_shared_pubkeys(pubkeys: Vec<Pubkey>) -> PubkeysPtr {
-        // Get the raw pointer components.
-        let len = pubkeys.len();
-        let data = NonNull::new(pubkeys.as_mut_ptr()).unwrap();
-        core::mem::forget(pubkeys);
-
-        // Construct our PubkeysPtr.
-        //
-        // SAFETY
-        // - We own this allocation exclusively & len is accurate.
-        unsafe { PubkeysPtr::from_raw_parts(data, len) }
-    }
 }
 
 impl<M> Bridge for TestBridge<M>
@@ -273,5 +260,24 @@ impl Worker for TestWorker {
 
     fn rem(&mut self) -> usize {
         self.cap - self.len
+    }
+}
+
+pub mod utils {
+    use super::*;
+
+    pub fn leak_pubkeys(mut pubkeys: Vec<Pubkey>) -> &'static PubkeysPtr {
+        // Get the raw pointer components.
+        let len = pubkeys.len();
+        let data = NonNull::new(pubkeys.as_mut_ptr()).unwrap();
+        core::mem::forget(pubkeys);
+
+        // Construct our PubkeysPtr.
+        //
+        // SAFETY
+        // - We own this allocation exclusively & len is accurate.
+        let keys = unsafe { PubkeysPtr::from_raw_parts(data, len) };
+
+        Box::leak(Box::new(keys))
     }
 }

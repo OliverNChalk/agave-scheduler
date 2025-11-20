@@ -660,7 +660,8 @@ mod tests {
     fn schedule_by_priority_alt_non_conflicting() {
         let mut bridge = TestBridge::new(5, 4);
         let mut scheduler = GreedyScheduler::new();
-        let resolved_pubkeys = TestBridge::to_shared_pubkeys(vec![1; 32]);
+        let resolved_pubkeys =
+            bridge::test::utils::leak_pubkeys(vec![Pubkey::new_from_array([1; 32])]);
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
@@ -677,7 +678,7 @@ mod tests {
                 response: WorkerAction::Check(
                     bridge.check_ok(SharablePubkeys {
                         offset: 0,
-                        num_pubkeys: resolved_pubkeys.as_slice().len(),
+                        num_pubkeys: resolved_pubkeys.as_slice().len() as u32,
                     }),
                     Some(resolved_pubkeys),
                 ),
@@ -700,7 +701,7 @@ mod tests {
                 response: WorkerAction::Check(
                     bridge.check_ok(SharablePubkeys {
                         offset: 0,
-                        num_pubkeys: resolved_pubkeys.as_slice().len(),
+                        num_pubkeys: resolved_pubkeys.as_slice().len() as u32,
                     }),
                     Some(resolved_pubkeys),
                 ),

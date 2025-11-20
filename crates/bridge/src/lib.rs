@@ -1,7 +1,7 @@
 mod bindings;
 mod spec;
 #[cfg(feature = "testing")]
-mod test;
+pub mod test;
 
 pub use bindings::SchedulerBindings;
 pub use spec::*;
