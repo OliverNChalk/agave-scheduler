@@ -19,7 +19,9 @@ use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
 use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
-use bridge::{Bridge, RuntimeState, TransactionId, TxDecision, WorkerAction, WorkerResponse};
+use bridge::{
+    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+};
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -46,6 +48,7 @@ const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE
 const_assert!(TX_BATCH_SIZE < 4096);
 const TX_BATCH_META_OFFSET: usize = TX_REGION_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
 
+const CHECK_WORKER: usize = 0;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
@@ -55,6 +58,7 @@ pub struct GreedyScheduler {
     state: TransactionMap,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
+    batch: Vec<TransactionId>,
 
     metrics: GreedyMetrics,
 }
@@ -68,6 +72,7 @@ impl GreedyScheduler {
             state: TransactionMap::with_capacity(STATE_CAPACITY),
             cu_in_flight: 0,
             schedule_locks: HashMap::default(),
+            batch: Vec::default(),
 
             metrics: GreedyMetrics::new(),
         }
@@ -94,10 +99,10 @@ impl GreedyScheduler {
             false => self.drain_tpu(bridge, 1024),
         }
 
-        /*
         // Queue additional checks.
-        self.schedule_checks(queues);
+        self.schedule_checks(bridge);
 
+        /*
         // Schedule if we're currently the leader.
         if is_leader {
             self.schedule_execute(queues);
@@ -168,42 +173,38 @@ impl GreedyScheduler {
         );
     }
 
-    /*
-    fn schedule_checks(&mut self, queues: &mut GreedyQueues) {
-        let queue = &mut queues.workers[0].pack_to_worker;
-        queue.sync();
-
+    fn schedule_checks<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         // Loop until worker queue is filled or backlog is empty.
-        let start_rem = queue.capacity() - queue.len();
-        for _ in 0..start_rem {
+        let start_len = self.unchecked.len();
+        while bridge.worker(0).rem() > 0 {
             if self.unchecked.is_empty() {
                 break;
             }
 
-            queue
-                .try_write(PackToWorkerMessage {
-                    flags: pack_message_flags::CHECK
-                        | check_flags::STATUS_CHECKS
-                        | check_flags::LOAD_FEE_PAYER_BALANCE
-                        | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-                    max_working_slot: u64::MAX,
-                    batch: Self::collect_batch(&self.allocator, || {
-                        self.unchecked
-                            .pop_max()
-                            .map(|id| (id, self.state[id.key].shared))
-                    }),
-                })
-                .unwrap();
+            self.batch.clear();
+            self.batch
+                .extend(std::iter::from_fn(|| self.unchecked.pop_max().map(|id| id.key)));
+            bridge.schedule(
+                CHECK_WORKER,
+                &self.batch,
+                u64::MAX,
+                pack_message_flags::CHECK
+                    | check_flags::STATUS_CHECKS
+                    | check_flags::LOAD_FEE_PAYER_BALANCE
+                    | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
+            );
         }
-        queue.commit();
 
         // Update metrics with our scheduled amount.
-        let new_rem = queue.capacity() - queue.len();
         self.metrics
             .check_requested
-            .increment((start_rem - new_rem) as u64);
+            .increment((self.unchecked.len() - start_len) as u64);
     }
 
+    /*
     fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
         self.schedule_locks.clear();
 
