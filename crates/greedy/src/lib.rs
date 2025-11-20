@@ -503,7 +503,7 @@ mod tests {
             key: batch.transactions[0],
             meta: todo!(),
             response: WorkerAction::Check(
-                check_ok(SharablePubkeys { offset: 0, num_pubkeys: 0 }),
+                check_ok(MOCK_PROGRESS.current_slot, SharablePubkeys { offset: 0, num_pubkeys: 0 }),
                 None,
             ),
         };
@@ -752,7 +752,6 @@ mod tests {
         };
         assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
     }
-    */
 
     struct Harness {
         slot: u64,
@@ -929,6 +928,7 @@ mod tests {
             queue.commit();
         }
     }
+    */
 
     fn noop_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> VersionedTransaction {
         Transaction::new_signed_with_payer(
@@ -985,17 +985,17 @@ mod tests {
         .unwrap()
     }
 
-    fn check_ok(resolved_pubkeys: SharablePubkeys) -> CheckResponse {
+    fn check_ok(slot: u64, resolved_pubkeys: SharablePubkeys) -> CheckResponse {
         CheckResponse {
             parsing_and_sanitization_flags: 0,
             status_check_flags: status_check_flags::REQUESTED | status_check_flags::PERFORMED,
             fee_payer_balance_flags: fee_payer_balance_flags::REQUESTED
                 | fee_payer_balance_flags::PERFORMED,
             resolve_flags: resolve_flags::REQUESTED | resolve_flags::PERFORMED,
-            included_slot: self.slot,
-            balance_slot: self.slot,
+            included_slot: slot,
+            balance_slot: slot,
             fee_payer_balance: u64::from(u32::MAX),
-            resolution_slot: self.slot,
+            resolution_slot: slot,
             min_alt_deactivation_slot: u64::MAX,
             resolved_pubkeys,
         }
