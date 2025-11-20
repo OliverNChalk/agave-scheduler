@@ -143,7 +143,7 @@ impl<M> Bridge for SchedulerBindings<M> {
         &mut self.workers[id]
     }
 
-    fn tx_get(&self, key: TransactionId) -> &crate::TransactionState {
+    fn tx(&self, key: TransactionId) -> &crate::TransactionState {
         &self.state[key]
     }
 

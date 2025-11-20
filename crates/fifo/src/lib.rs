@@ -73,8 +73,8 @@ where
             false => 1024,
         };
         self.bridge.tpu_drain(
-            |_, (id, _)| {
-                self.check_queue.push_back(id);
+            |_, key| {
+                self.check_queue.push_back(key);
 
                 TxDecision::Keep
             },

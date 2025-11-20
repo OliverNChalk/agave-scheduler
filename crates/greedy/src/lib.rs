@@ -156,8 +156,8 @@ impl GreedyScheduler {
         // TODO: Need to dedupe already seen transactions?
 
         bridge.tpu_drain(
-            |bridge, (key, tx)| match Self::calculate_priority(bridge.runtime(), tx) {
-                Some((view, priority, cost)) => {
+            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+                Some((priority, cost)) => {
                     self.unchecked.push(PriorityId { priority, cost, key });
                     self.metrics.recv_ok.increment(1);
 
@@ -243,7 +243,7 @@ impl GreedyScheduler {
 
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
-                        let (tx, keys) = &bridge.tx_get(id.key);
+                        let (tx, keys) = &bridge.tx(id.key);
                         self.state
                         if tx
                             .write_locks()
@@ -417,11 +417,10 @@ impl GreedyScheduler {
 
     fn calculate_priority<'a>(
         runtime: &RuntimeState,
-        tx: &'a TransactionPtr,
-    ) -> Option<(SanitizedTransactionView<&'a TransactionPtr>, u64, u32)> {
-        // TODO: Impl `TransactionData` for &TransactionPtr.
-        let tx = SanitizedTransactionView::try_new_sanitized(tx, true).ok()?;
-        let tx = RuntimeTransaction::<SanitizedTransactionView<&TransactionPtr>>::try_new(
+        tx: &SanitizedTransactionView<TransactionPtr>,
+    ) -> Option<(u64, u32)> {
+        // TODO: Need to construct a runtime transaction around a reference.
+        let tx = RuntimeTransaction::<SanitizedTransactionView<TransactionPtr>>::try_new(
             tx,
             MessageHash::Compute,
             None,
@@ -456,7 +455,6 @@ impl GreedyScheduler {
 
         // Compute priority.
         Some((
-            tx.into_inner_transaction(),
             reward
                 .saturating_mul(1_000_000)
                 .saturating_div(cost.saturating_add(1)),

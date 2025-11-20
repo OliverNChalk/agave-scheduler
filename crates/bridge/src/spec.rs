@@ -19,7 +19,7 @@ pub trait Bridge {
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
-    fn tx_get(&self, key: TransactionId) -> &TransactionState;
+    fn tx(&self, key: TransactionId) -> &TransactionState;
 
     fn tx_remove(&mut self, key: TransactionId);
 
