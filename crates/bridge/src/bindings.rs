@@ -191,9 +191,17 @@ impl<M> Bridge for SchedulerBindings<M> {
             };
 
             // Sanitize the transaction, drop it immediately if it fails sanitization.
-            let tx = match SanitizedTransactionView::try_new_sanitized(tx, true) {
-                Ok(tx) => tx,
-                Err(err) => todo!("metric"),
+            let Ok(tx) = SanitizedTransactionView::try_new_sanitized(tx, true) else {
+                // SAFETY:
+                // - We own `tx` exclusively.
+                // - The previous `TransactionPtr` has been dropped by `try_new_sanitized`.
+                unsafe {
+                    self.allocator.free_offset(msg.transaction.offset);
+                }
+
+                // TODO: Metrics.
+
+                continue;
             };
 
             // Get the ID so the caller can store it for later use.
