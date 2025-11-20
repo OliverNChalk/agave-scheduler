@@ -15,7 +15,7 @@ pub trait Bridge {
 
     fn progress(&self) -> &ProgressMessage;
 
-    fn worker_len(&self) -> usize;
+    fn worker_count(&self) -> usize;
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
@@ -61,6 +61,7 @@ pub trait Worker {
     }
 
     fn len(&mut self) -> usize;
+
     fn rem(&mut self) -> usize;
 }
 

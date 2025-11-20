@@ -199,7 +199,7 @@ impl GreedyScheduler {
             .saturating_sub(bridge.progress().remaining_cost_units)
             + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
-        for worker in 1..bridge.worker_len() {
+        for worker in 1..bridge.worker_count() {
             if budget_remaining == 0 || self.checked.is_empty() {
                 break;
             }
@@ -443,7 +443,6 @@ impl Ord for PriorityId {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use std::os::fd::IntoRawFd;
@@ -451,12 +450,16 @@ mod tests {
 
     use agave_scheduler_bindings::worker_message_types::CheckResponse;
     use agave_scheduler_bindings::{
-        IS_NOT_LEADER, SharablePubkeys, SharableTransactionRegion, WorkerToPackMessage,
-        processed_codes,
+        IS_NOT_LEADER, PackToWorkerMessage, ProgressMessage, SharablePubkeys,
+        SharableTransactionRegion, TpuToPackMessage, WorkerToPackMessage, processed_codes,
     };
     use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
     use agave_scheduling_utils::responses_region::allocate_check_response_region;
+    use agave_scheduling_utils::transaction_ptr::TransactionPtrBatch;
+    use agave_transaction_view::transaction_view::TransactionView;
+    use bridge::TestBridge;
+    use rts_alloc::Allocator;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Pubkey, Signer};
@@ -749,7 +752,7 @@ mod tests {
         slot: u64,
         session: AgaveSession,
         scheduler: GreedyScheduler,
-        queues: GreedyQueues,
+        bridge: TestBridge<PriorityId>,
     }
 
     impl Harness {
@@ -770,9 +773,9 @@ mod tests {
                 files.into_iter().map(IntoRawFd::into_raw_fd).collect(),
             )
             .unwrap();
-            let (scheduler, queues) = GreedyScheduler::new(client_session);
+            let scheduler = GreedyScheduler::new();
 
-            Self { slot: 0, session: agave_session, scheduler, queues }
+            Self { slot: 0, session: agave_session, scheduler, bridge: TestBridge::default() }
         }
 
         fn allocator(&self) -> &Allocator {
@@ -780,7 +783,7 @@ mod tests {
         }
 
         fn poll_scheduler(&mut self) {
-            self.scheduler.poll(&mut self.queues);
+            self.scheduler.poll(&mut self.bridge);
         }
 
         fn process_checks(&mut self) {
@@ -976,4 +979,3 @@ mod tests {
         .unwrap()
     }
 }
-*/

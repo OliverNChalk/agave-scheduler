@@ -135,7 +135,7 @@ impl<M> Bridge for SchedulerBindings<M> {
         &self.progress
     }
 
-    fn worker_len(&self) -> usize {
+    fn worker_count(&self) -> usize {
         self.workers.len()
     }
 
