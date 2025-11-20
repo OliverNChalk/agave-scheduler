@@ -184,7 +184,7 @@ impl GreedyScheduler {
         // Update metrics with our scheduled amount.
         self.metrics
             .check_requested
-            .increment((self.unchecked.len() - start_len) as u64);
+            .increment((start_len - self.unchecked.len()) as u64);
     }
 
     fn schedule_execute<B>(&mut self, bridge: &mut B)
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn check_no_schedule() {
-        let mut bridge = TestBridge::default();
+        let mut bridge = TestBridge::new(5, 4);
         let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer.
@@ -498,6 +498,7 @@ mod tests {
 
         // Assert - A single request (to check the TX) is sent.
         let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.transactions.len(), 1);
         assert_eq!(bridge.pop_schedule(), None);
         assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
 
@@ -510,7 +511,7 @@ mod tests {
                 None,
             ),
         };
-        bridge.queue_response(batch, rep);
+        bridge.queue_response(&batch, rep);
         scheduler.poll(&mut bridge);
 
         // Assert - Scheduler does not schedule the valid TX as we are not leader.

@@ -67,12 +67,14 @@ pub trait Worker {
     fn rem(&mut self) -> usize;
 }
 
+#[derive(Debug, Clone)]
 pub struct WorkerResponse<'a, M> {
     pub key: TransactionId,
     pub meta: M,
     pub response: WorkerAction<'a>,
 }
 
+#[derive(Debug, Clone)]
 pub enum WorkerAction<'a> {
     Unprocessed,
     Check(CheckResponse, Option<&'a PubkeysPtr>),

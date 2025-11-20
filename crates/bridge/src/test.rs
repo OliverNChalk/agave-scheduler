@@ -5,6 +5,7 @@ use std::ptr::NonNull;
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::ProgressMessage;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::transaction_data::TransactionData;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
@@ -18,8 +19,9 @@ use crate::{
 pub struct TestBridge<M> {
     progress_queue: VecDeque<ProgressMessage>,
     tpu_queue: VecDeque<TransactionId>,
-    worker_queue: VecDeque<()>,
+    worker_queues: Vec<VecDeque<WorkerResponse<'static, M>>>,
     workers: Vec<TestWorker>,
+    scheduled: VecDeque<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>>,
 
     progress: ProgressMessage,
     runtime: RuntimeState,
@@ -28,7 +30,38 @@ pub struct TestBridge<M> {
     _meta: PhantomData<M>,
 }
 
-impl<M> TestBridge<M> {
+impl<M> TestBridge<M>
+where
+    M: Copy,
+{
+    pub fn new(worker_count: usize, worker_req_cap: usize) -> Self {
+        Self {
+            progress_queue: VecDeque::default(),
+            tpu_queue: VecDeque::default(),
+            worker_queues: vec![VecDeque::default(); worker_count],
+            workers: vec![TestWorker { len: 0, cap: worker_req_cap }; worker_count],
+            scheduled: VecDeque::default(),
+
+            progress: ProgressMessage {
+                leader_state: 0,
+                current_slot: 0,
+                next_leader_slot: u64::MAX,
+                leader_range_end: u64::MAX,
+                remaining_cost_units: 0,
+                current_slot_progress: 0,
+            },
+            runtime: RuntimeState {
+                feature_set: FeatureSet::all_enabled(),
+                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
+                lamports_per_signature: 5000,
+                burn_percent: 50,
+            },
+            state: SlotMap::default(),
+
+            _meta: PhantomData,
+        }
+    }
+
     pub fn queue_progress(&mut self, progress: ProgressMessage) {
         self.progress_queue.push_back(progress);
     }
@@ -54,47 +87,21 @@ impl<M> TestBridge<M> {
 
     pub fn queue_response(
         &mut self,
-        batch: ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
-        response: WorkerResponse<'_, M>,
+        batch: &ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
+        response: WorkerResponse<'static, M>,
     ) {
-        todo!()
+        self.worker_queues[batch.worker].push_back(response);
     }
 
     pub fn pop_schedule(&mut self) -> Option<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>> {
-        todo!()
+        self.scheduled.pop_front()
     }
 }
 
-impl<M> Default for TestBridge<M> {
-    fn default() -> Self {
-        Self {
-            progress_queue: VecDeque::default(),
-            tpu_queue: VecDeque::default(),
-            worker_queue: VecDeque::default(),
-            workers: vec![TestWorker { len: 0, cap: 4 }],
-
-            progress: ProgressMessage {
-                leader_state: 0,
-                current_slot: 0,
-                next_leader_slot: u64::MAX,
-                leader_range_end: u64::MAX,
-                remaining_cost_units: 0,
-                current_slot_progress: 0,
-            },
-            runtime: RuntimeState {
-                feature_set: FeatureSet::all_enabled(),
-                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
-                lamports_per_signature: 5000,
-                burn_percent: 50,
-            },
-            state: SlotMap::default(),
-
-            _meta: PhantomData,
-        }
-    }
-}
-
-impl<M> Bridge for TestBridge<M> {
+impl<M> Bridge for TestBridge<M>
+where
+    M: Copy,
+{
     type Worker = TestWorker;
     type Meta = M;
 
@@ -151,19 +158,52 @@ impl<M> Bridge for TestBridge<M> {
     fn pop_worker(
         &mut self,
         worker: usize,
-        cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool {
-        match self.worker_queue.pop_front() {
-            Some(rep) => todo!(),
-            None => false,
+        let Some(WorkerResponse { key, meta, response }) = self.worker_queues[worker].pop_front()
+        else {
+            return false;
+        };
+
+        if cb(self, WorkerResponse { key, meta, response }) == TxDecision::Drop {
+            let state = self.state.remove(key).unwrap();
+
+            // Extract the raw parts of the allocation.
+            let data = state.data.inner_data().data();
+            let len = data.len();
+            let ptr = data.as_ptr();
+            drop(state);
+
+            // Recover the underlying allocation so we can drop it.
+            //
+            // SAFETY
+            // - We original allocated this and exclusively own it, so it's safe for us to
+            //   deallocate.
+            unsafe {
+                let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
+                core::ptr::drop_in_place(allocation);
+            }
         }
+
+        true
     }
 
-    fn schedule(&mut self, batch: ScheduleBatch<&[KeyedTransactionMeta<M>]>) {
-        todo!()
+    fn schedule(
+        &mut self,
+        ScheduleBatch { worker, transactions, max_working_slot, flags }: ScheduleBatch<
+            &[KeyedTransactionMeta<M>],
+        >,
+    ) {
+        self.scheduled.push_back(ScheduleBatch {
+            worker,
+            transactions: transactions.to_vec(),
+            max_working_slot,
+            flags,
+        });
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TestWorker {
     len: usize,
     cap: usize,
