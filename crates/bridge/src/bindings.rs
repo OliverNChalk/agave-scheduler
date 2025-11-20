@@ -15,7 +15,8 @@ use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
 use crate::{
-    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+    Bridge, RuntimeState, TransactionId, TransactionState, TxDecision, Worker, WorkerAction,
+    WorkerResponse,
 };
 
 pub struct SchedulerBindings<M> {
@@ -105,7 +106,10 @@ impl<M> SchedulerBindings<M> {
             //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
             //   region.
             unsafe {
-                tx_ptr.add(i).write(tx.region);
+                tx_ptr
+                    .add(i)
+                    .write(tx.data.inner().to_sharable_transaction_region(allocator));
+                // tx_ptr.add(i).write(tx.region);
                 meta_ptr.add(i).write(id);
             };
         }
@@ -129,8 +133,16 @@ impl<M> Bridge for SchedulerBindings<M> {
         &self.progress
     }
 
+    fn worker_len(&self) -> usize {
+        self.workers.len()
+    }
+
     fn worker(&mut self, id: usize) -> &mut Self::Worker {
         &mut self.workers[id]
+    }
+
+    fn tx(&self, key: TransactionId) -> &crate::TransactionState {
+        &self.state[key]
     }
 
     fn drop_tx(&mut self, key: TransactionId) {
@@ -344,10 +356,6 @@ impl<M> Bridge for SchedulerBindings<M> {
 struct KeyedTransactionMeta<M> {
     key: TransactionId,
     meta: M,
-}
-
-struct TransactionState {
-    region: SharableTransactionRegion,
 }
 
 pub struct SchedulerWorker(ClientWorkerSession);

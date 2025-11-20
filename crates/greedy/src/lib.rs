@@ -58,7 +58,7 @@ pub struct GreedyScheduler {
     state: TransactionMap,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
-    batch: Vec<TransactionId>,
+    schedule_batch: Vec<TransactionId>,
 
     metrics: GreedyMetrics,
 }
@@ -72,7 +72,7 @@ impl GreedyScheduler {
             state: TransactionMap::with_capacity(STATE_CAPACITY),
             cu_in_flight: 0,
             schedule_locks: HashMap::default(),
-            batch: Vec::default(),
+            schedule_batch: Vec::default(),
 
             metrics: GreedyMetrics::new(),
         }
@@ -184,12 +184,12 @@ impl GreedyScheduler {
                 break;
             }
 
-            self.batch.clear();
-            self.batch
+            self.schedule_batch.clear();
+            self.schedule_batch
                 .extend(std::iter::from_fn(|| self.unchecked.pop_max().map(|id| id.key)));
             bridge.schedule(
                 CHECK_WORKER,
-                &self.batch,
+                &self.schedule_batch,
                 u64::MAX,
                 pack_message_flags::CHECK
                     | check_flags::STATUS_CHECKS
@@ -204,32 +204,33 @@ impl GreedyScheduler {
             .increment((self.unchecked.len() - start_len) as u64);
     }
 
-    /*
-    fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
+    fn schedule_execute<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         self.schedule_locks.clear();
 
-        debug_assert_eq!(self.progress.leader_state, IS_LEADER);
+        debug_assert_eq!(bridge.progress().leader_state, IS_LEADER);
         let budget_percentage =
-            std::cmp::min(self.progress.current_slot_progress + BLOCK_FILL_CUTOFF, 100);
+            std::cmp::min(bridge.progress().current_slot_progress + BLOCK_FILL_CUTOFF, 100);
         // TODO: Would be ideal for the scheduler protocol to tell us the max block
         // units.
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
-            .saturating_sub(self.progress.remaining_cost_units)
+            .saturating_sub(bridge.progress().remaining_cost_units)
             + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
-        for worker in &mut queues.workers[1..] {
+        for worker in 1..bridge.worker_len() {
             if budget_remaining == 0 || self.checked.is_empty() {
                 return;
             }
 
             // If the worker already has a pending job, don't give it any more.
-            worker.pack_to_worker.sync();
-            if !worker.pack_to_worker.is_empty() {
+            if bridge.worker(worker).len() > 0 {
                 continue;
             }
 
-            let batch = Self::collect_batch(&self.allocator, || {
+            let pop_next = || {
                 self.checked
                     .pop_max()
                     .filter(|id| {
@@ -242,7 +243,8 @@ impl GreedyScheduler {
 
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
-                        let tx = &self.state[id.key];
+                        let (tx, keys) = &bridge.tx(id.key);
+                        self.state
                         if tx
                             .write_locks()
                             .any(|key| self.schedule_locks.insert(*key, true).is_some())
@@ -260,39 +262,35 @@ impl GreedyScheduler {
 
                         // Update the budget as we are scheduling this TX.
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
+                        self.cu_in_flight += id.cost;
 
                         true
                     })
-                    .map(|id| {
-                        self.cu_in_flight += id.cost;
+                    .map(|id| id.key)
+            };
 
-                        (id, self.state[id.key].shared)
-                    })
-            });
+            self.schedule_batch.clear();
+            self.schedule_batch.extend(std::iter::from_fn(pop_next));
 
             // If we failed to schedule anything, don't send the batch.
-            if batch.num_transactions == 0 {
+            if self.schedule_batch.is_empty() {
                 return;
             }
 
             // Update metrics.
             self.metrics
                 .execute_requested
-                .increment(u64::from(batch.num_transactions));
+                .increment(u64::from(self.schedule_batch.len()));
 
             // Write the next batch for the worker.
-            worker
-                .pack_to_worker
-                .try_write(PackToWorkerMessage {
-                    flags: pack_message_flags::EXECUTE,
-                    max_working_slot: self.progress.current_slot + 1,
-                    batch,
-                })
-                .unwrap();
-            worker.pack_to_worker.commit();
+            bridge.schedule(
+                worker_id,
+                &self.schedule_batch,
+                bridge.progress().current_slot + 1,
+                pack_message_flags::EXECUTE,
+            );
         }
     }
-    */
 
     fn on_check<B>(
         &mut self,

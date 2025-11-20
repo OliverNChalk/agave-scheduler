@@ -616,10 +616,12 @@ dependencies = [
  "agave-feature-set",
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
+ "agave-transaction-view",
  "rts-alloc",
  "shaq",
  "slotmap",
  "solana-fee",
+ "solana-pubkey 3.0.0",
 ]
 
 [[package]]
