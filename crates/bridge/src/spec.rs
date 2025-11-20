@@ -79,7 +79,7 @@ pub enum WorkerAction<'a> {
     Execute(ExecutionResponse),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyedTransactionMeta<M> {
     pub key: TransactionId,
     pub meta: M,

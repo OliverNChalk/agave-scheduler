@@ -503,8 +503,8 @@ mod tests {
 
         // Respond with OK.
         let rep = WorkerResponse {
-            key: batch.transactions[0],
-            meta: todo!(),
+            key: batch.transactions[0].key,
+            meta: batch.transactions[0].meta,
             response: WorkerAction::Check(
                 check_ok(MOCK_PROGRESS.current_slot, SharablePubkeys { offset: 0, num_pubkeys: 0 }),
                 None,

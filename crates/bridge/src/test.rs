@@ -18,13 +18,13 @@ impl<M> TestBridge<M> {
 
     pub fn queue_response(
         &mut self,
-        batch: ScheduleBatch<Vec<TransactionId>>,
+        batch: ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
         response: WorkerResponse<'_, M>,
     ) {
         todo!()
     }
 
-    pub fn pop_schedule(&mut self) -> Option<ScheduleBatch<Vec<TransactionId>>> {
+    pub fn pop_schedule(&mut self) -> Option<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>> {
         todo!()
     }
 }
