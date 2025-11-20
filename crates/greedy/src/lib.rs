@@ -330,55 +330,6 @@ impl GreedyScheduler {
         TxDecision::Drop
     }
 
-    /*
-    fn collect_batch(
-        allocator: &Allocator,
-        mut pop: impl FnMut() -> Option<(PriorityId, SharableTransactionRegion)>,
-    ) -> SharableTransactionBatchRegion {
-        // Allocate a batch that can hold all our transaction pointers.
-        let transactions = allocator.allocate(TX_BATCH_SIZE as u32).unwrap();
-        let transactions_offset = unsafe { allocator.offset(transactions) };
-
-        // Get our two pointers to the TX region & meta region.
-        let tx_ptr = allocator
-            .ptr_from_offset(transactions_offset)
-            .cast::<SharableTransactionRegion>();
-        // SAFETY:
-        // - Pointer is guaranteed to not overrun the allocation as we just created it
-        //   with a sufficient size.
-        let meta_ptr = unsafe {
-            allocator
-                .ptr_from_offset(transactions_offset)
-                .byte_add(TX_BATCH_META_OFFSET)
-                .cast::<PriorityId>()
-        };
-
-        // Fill in the batch with transaction pointers.
-        let mut num_transactions = 0;
-        while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
-            let Some((id, tx)) = pop() else {
-                break;
-            };
-
-            // SAFETY:
-            // - We have allocated the transaction batch to support at least
-            //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
-            //   region.
-            unsafe {
-                tx_ptr.add(num_transactions).write(tx);
-                meta_ptr.add(num_transactions).write(id);
-            };
-
-            num_transactions += 1;
-        }
-
-        SharableTransactionBatchRegion {
-            num_transactions: num_transactions.try_into().unwrap(),
-            transactions_offset,
-        }
-    }
-    */
-
     fn calculate_priority(
         runtime: &RuntimeState,
         tx: &SanitizedTransactionView<TransactionPtr>,
