@@ -498,9 +498,9 @@ mod tests {
 
         // Assert - A single request (to check the TX) is sent.
         let batch = bridge.pop_schedule().unwrap();
-        assert_eq!(batch.transactions.len(), 1);
         assert_eq!(bridge.pop_schedule(), None);
         assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
 
         // Respond with OK.
         let rep = WorkerResponse {
@@ -518,42 +518,50 @@ mod tests {
         assert_eq!(bridge.pop_schedule(), None);
     }
 
-    /*
     #[test]
     fn check_then_schedule() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Notify the scheduler that node is now leader.
-        harness.send_progress(ProgressMessage { leader_state: IS_LEADER, ..MOCK_PROGRESS });
+        bridge.queue_progress(ProgressMessage { leader_state: IS_LEADER, ..MOCK_PROGRESS });
 
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.send_tx(
+        bridge.queue_tpu(
             &solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()).into(),
         );
 
         // Poll the greedy scheduler.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
 
         // Assert - A single request (to check the TX) is sent.
-        let mut worker_requests = harness.drain_pack_to_workers();
-        assert_eq!(worker_requests.len(), 1);
-        let (worker_index, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, pack_message_flags::CHECK);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
 
         // Respond with OK.
-        harness.send_check_ok(worker_index, message, None);
-        harness.poll_scheduler();
+        let rep = WorkerResponse {
+            key: batch.transactions[0].key,
+            meta: batch.transactions[0].meta,
+            response: WorkerAction::Check(
+                check_ok(MOCK_PROGRESS.current_slot, SharablePubkeys { offset: 0, num_pubkeys: 0 }),
+                None,
+            ),
+        };
+        bridge.queue_response(&batch, rep);
+        scheduler.poll(&mut bridge);
 
         // Assert - A single request (to execute the TX) is sent.
-        let mut worker_requests = harness.drain_pack_to_workers();
-        assert_eq!(worker_requests.len(), 1);
-        let (_, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, pack_message_flags::EXECUTE);
-        assert_eq!(message.batch.num_transactions, 1);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(batch.flags & 1, pack_message_flags::EXECUTE);
+        assert_eq!(batch.transactions.len(), 1);
     }
 
+    /*
     #[test]
     fn schedule_by_priority_static_non_conflicting() {
         let mut harness = Harness::setup();
