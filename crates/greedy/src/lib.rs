@@ -605,31 +605,31 @@ mod tests {
         assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
-    /*
     #[test]
     fn schedule_by_priority_static_conflicting() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer (with low priority).
         let payer = Keypair::new();
         let tx0 = noop_with_budget(&payer, 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let tx1 = noop_with_budget(&payer, 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -637,28 +637,25 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled tx1.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex0] = &batch.transactions[..] else {
             panic!();
         };
-        let [ex0] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
 
         // Assert - Scheduler has scheduled tx0.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex1] = &batch.transactions[..] else {
             panic!();
         };
-        let [ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
+    /*
     #[test]
     fn schedule_by_priority_alt_non_conflicting() {
         let mut harness = Harness::setup();
@@ -668,26 +665,26 @@ mod tests {
         let payer0 = Keypair::new();
         let read_lock = Pubkey::new_unique();
         let tx0 = noop_with_alt_locks(&payer0, &[], &[read_lock], 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
         let (worker, msg) = harness.drain_pack_to_workers()[0];
         harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
         let tx1 = noop_with_alt_locks(&payer1, &[], &[read_lock], 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
         let (worker, msg) = harness.drain_pack_to_workers()[0];
         harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -695,7 +692,7 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled both.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
         let batches = harness.drain_batches();
         let [(_, batch)] = &batches[..] else {
             panic!();
@@ -716,26 +713,26 @@ mod tests {
         let payer0 = Keypair::new();
         let write_lock = Pubkey::new_unique();
         let tx0 = noop_with_alt_locks(&payer0, &[write_lock], &[], 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
         let (worker, msg) = harness.drain_pack_to_workers()[0];
         harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
         let tx1 = noop_with_alt_locks(&payer1, &[write_lock], &[], 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
         let (worker, msg) = harness.drain_pack_to_workers()[0];
         harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -743,7 +740,7 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled tx1.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
         let batches = harness.drain_batches();
         let [(_, batch)] = &batches[..] else {
             panic!();
@@ -754,7 +751,7 @@ mod tests {
         assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
 
         // Assert - Scheduler has scheduled tx0.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
         let batches = harness.drain_batches();
         let [(_, batch)] = &batches[..] else {
             panic!();
