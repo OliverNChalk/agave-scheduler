@@ -19,9 +19,9 @@ pub trait Bridge {
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
-    fn tx(&self, key: TransactionId) -> &TransactionState;
+    fn tx_get(&self, key: TransactionId) -> &TransactionState;
 
-    fn drop_tx(&mut self, key: TransactionId);
+    fn tx_remove(&mut self, key: TransactionId);
 
     fn drain_progress(&mut self);
 
@@ -29,7 +29,7 @@ pub trait Bridge {
 
     fn tpu_drain(
         &mut self,
-        cb: impl FnMut(&mut Self, (TransactionId, &TransactionPtr)) -> TxDecision,
+        cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
         max_count: usize,
     );
 

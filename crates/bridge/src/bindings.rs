@@ -10,6 +10,7 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
@@ -106,10 +107,11 @@ impl<M> SchedulerBindings<M> {
             //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
             //   region.
             unsafe {
-                tx_ptr
-                    .add(i)
-                    .write(tx.data.inner().to_sharable_transaction_region(allocator));
-                // tx_ptr.add(i).write(tx.region);
+                tx_ptr.add(i).write(
+                    tx.data
+                        .inner_data()
+                        .to_sharable_transaction_region(allocator),
+                );
                 meta_ptr.add(i).write(id);
             };
         }
@@ -141,17 +143,17 @@ impl<M> Bridge for SchedulerBindings<M> {
         &mut self.workers[id]
     }
 
-    fn tx(&self, key: TransactionId) -> &crate::TransactionState {
+    fn tx_get(&self, key: TransactionId) -> &crate::TransactionState {
         &self.state[key]
     }
 
-    fn drop_tx(&mut self, key: TransactionId) {
+    fn tx_remove(&mut self, key: TransactionId) {
         let state = self.state.remove(key).unwrap();
 
         // SAFETY
         // - We own the allocation exclusively.
         unsafe {
-            self.allocator.free_offset(state.region.offset);
+            state.data.into_inner_data().free(&self.allocator);
         }
     }
 
@@ -171,7 +173,7 @@ impl<M> Bridge for SchedulerBindings<M> {
 
     fn tpu_drain(
         &mut self,
-        mut cb: impl FnMut(&mut Self, (TransactionId, &TransactionPtr)) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
         max_count: usize,
     ) {
         self.tpu_to_pack.sync();
@@ -187,16 +189,22 @@ impl<M> Bridge for SchedulerBindings<M> {
             let tx = unsafe {
                 TransactionPtr::from_sharable_transaction_region(&msg.transaction, &self.allocator)
             };
-            let id = self
-                .state
-                .insert(TransactionState { region: msg.transaction });
+
+            // Sanitize the transaction, drop it immediately if it fails sanitization.
+            let tx = match SanitizedTransactionView::try_new_sanitized(tx, true) {
+                Ok(tx) => tx,
+                Err(err) => todo!("metric"),
+            };
+
+            // Get the ID so the caller can store it for later use.
+            let id = self.state.insert(TransactionState { data: tx, keys: None });
 
             // Remove & free the TX if the scheduler doesn't want it.
-            if cb(self, (id, &tx)) == TxDecision::Drop {
-                self.state.remove(id).unwrap();
+            if cb(self, id) == TxDecision::Drop {
+                let state = self.state.remove(id).unwrap();
                 // SAFETY:
                 // - We own `tx` exclusively.
-                unsafe { tx.free(&self.allocator) };
+                unsafe { state.data.into_inner_data().free(&self.allocator) };
             }
         }
 

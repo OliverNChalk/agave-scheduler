@@ -149,7 +149,7 @@ impl GreedyScheduler {
         for _ in 0..shortfall {
             let id = self.unchecked.pop_min().unwrap();
 
-            bridge.drop_tx(id.key);
+            bridge.tx_remove(id.key);
         }
         self.metrics.recv_evict.increment(shortfall as u64);
 
@@ -243,7 +243,7 @@ impl GreedyScheduler {
 
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
-                        let (tx, keys) = &bridge.tx(id.key);
+                        let (tx, keys) = &bridge.tx_get(id.key);
                         self.state
                         if tx
                             .write_locks()
@@ -332,7 +332,7 @@ impl GreedyScheduler {
         // Evict lowest priority if at capacity.
         if self.checked.len() == CHECKED_CAPACITY {
             let id = self.checked.pop_min().unwrap();
-            bridge.drop_tx(id.key);
+            bridge.tx_remove(id.key);
 
             self.metrics.check_evict.increment(1);
         }
