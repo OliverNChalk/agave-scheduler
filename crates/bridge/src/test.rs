@@ -3,7 +3,10 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
-use agave_scheduler_bindings::ProgressMessage;
+use agave_scheduler_bindings::worker_message_types::{
+    CheckResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
+};
+use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_data::TransactionData;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
@@ -13,7 +16,7 @@ use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
-    TxDecision, Worker, WorkerResponse,
+    TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 
 pub struct TestBridge<M> {
@@ -94,8 +97,46 @@ where
         self.worker_queues[batch.worker].push_back(response);
     }
 
+    pub fn queue_all_checks_ok(&mut self) {
+        while let Some(batch) = self.pop_schedule() {
+            assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+            assert!(batch.max_working_slot >= self.progress.current_slot);
+
+            for KeyedTransactionMeta { key, meta } in &batch.transactions {
+                self.queue_response(
+                    &batch,
+                    WorkerResponse {
+                        key: *key,
+                        meta: *meta,
+                        response: WorkerAction::Check(
+                            self.check_ok(SharablePubkeys { offset: 0, num_pubkeys: 0 }),
+                            None,
+                        ),
+                    },
+                );
+            }
+        }
+    }
+
     pub fn pop_schedule(&mut self) -> Option<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>> {
         self.scheduled.pop_front()
+    }
+
+    #[must_use]
+    pub fn check_ok(&self, resolved_pubkeys: SharablePubkeys) -> CheckResponse {
+        CheckResponse {
+            parsing_and_sanitization_flags: 0,
+            status_check_flags: status_check_flags::REQUESTED | status_check_flags::PERFORMED,
+            fee_payer_balance_flags: fee_payer_balance_flags::REQUESTED
+                | fee_payer_balance_flags::PERFORMED,
+            resolve_flags: resolve_flags::REQUESTED | resolve_flags::PERFORMED,
+            included_slot: self.progress.current_slot,
+            balance_slot: self.progress.current_slot,
+            fee_payer_balance: u64::from(u32::MAX),
+            resolution_slot: self.progress.current_slot,
+            min_alt_deactivation_slot: u64::MAX,
+            resolved_pubkeys,
+        }
     }
 }
 

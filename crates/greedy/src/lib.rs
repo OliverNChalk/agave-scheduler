@@ -507,7 +507,7 @@ mod tests {
             key: batch.transactions[0].key,
             meta: batch.transactions[0].meta,
             response: WorkerAction::Check(
-                check_ok(MOCK_PROGRESS.current_slot, SharablePubkeys { offset: 0, num_pubkeys: 0 }),
+                bridge.check_ok(SharablePubkeys { offset: 0, num_pubkeys: 0 }),
                 None,
             ),
         };
@@ -547,7 +547,7 @@ mod tests {
             key: batch.transactions[0].key,
             meta: batch.transactions[0].meta,
             response: WorkerAction::Check(
-                check_ok(MOCK_PROGRESS.current_slot, SharablePubkeys { offset: 0, num_pubkeys: 0 }),
+                bridge.check_ok(SharablePubkeys { offset: 0, num_pubkeys: 0 }),
                 None,
             ),
         };
@@ -561,32 +561,32 @@ mod tests {
         assert_eq!(batch.transactions.len(), 1);
     }
 
-    /*
     #[test]
     fn schedule_by_priority_static_non_conflicting() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
         let tx0 = noop_with_budget(&payer0, 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
         let tx1 = noop_with_budget(&payer1, 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -594,18 +594,18 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled both.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch0 = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+
+        let [ex0, ex1] = batch0.transactions[..] else {
             panic!();
         };
-        let [ex0, ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
+    /*
     #[test]
     fn schedule_by_priority_static_conflicting() {
         let mut harness = Harness::setup();
@@ -995,21 +995,5 @@ mod tests {
             &[payer],
         )
         .unwrap()
-    }
-
-    fn check_ok(slot: u64, resolved_pubkeys: SharablePubkeys) -> CheckResponse {
-        CheckResponse {
-            parsing_and_sanitization_flags: 0,
-            status_check_flags: status_check_flags::REQUESTED | status_check_flags::PERFORMED,
-            fee_payer_balance_flags: fee_payer_balance_flags::REQUESTED
-                | fee_payer_balance_flags::PERFORMED,
-            resolve_flags: resolve_flags::REQUESTED | resolve_flags::PERFORMED,
-            included_slot: slot,
-            balance_slot: slot,
-            fee_payer_balance: u64::from(u32::MAX),
-            resolution_slot: slot,
-            min_alt_deactivation_slot: u64::MAX,
-            resolved_pubkeys,
-        }
     }
 }
