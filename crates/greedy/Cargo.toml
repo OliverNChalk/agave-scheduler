@@ -9,16 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-agave-feature-set = { workspace = true, features = ["agave-unstable-api"] }
 agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 agave-transaction-view.workspace = true
+bridge.workspace = true
 hashbrown.workspace = true
 metrics.workspace = true
 min-max-heap.workspace = true
-rts-alloc.workspace = true
-shaq.workspace = true
-slotmap.workspace = true
 solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
 solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee = { workspace = true, features = ["agave-unstable-api"] }

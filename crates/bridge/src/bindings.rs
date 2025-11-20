@@ -10,12 +10,14 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
 use crate::{
-    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+    Bridge, RuntimeState, TransactionId, TransactionState, TxDecision, Worker, WorkerAction,
+    WorkerResponse,
 };
 
 pub struct SchedulerBindings<M> {
@@ -105,7 +107,11 @@ impl<M> SchedulerBindings<M> {
             //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
             //   region.
             unsafe {
-                tx_ptr.add(i).write(tx.region);
+                tx_ptr.add(i).write(
+                    tx.data
+                        .inner_data()
+                        .to_sharable_transaction_region(allocator),
+                );
                 meta_ptr.add(i).write(id);
             };
         }
@@ -129,17 +135,25 @@ impl<M> Bridge for SchedulerBindings<M> {
         &self.progress
     }
 
+    fn worker_len(&self) -> usize {
+        self.workers.len()
+    }
+
     fn worker(&mut self, id: usize) -> &mut Self::Worker {
         &mut self.workers[id]
     }
 
-    fn drop_tx(&mut self, key: TransactionId) {
+    fn tx(&self, key: TransactionId) -> &crate::TransactionState {
+        &self.state[key]
+    }
+
+    fn tx_drop(&mut self, key: TransactionId) {
         let state = self.state.remove(key).unwrap();
 
         // SAFETY
         // - We own the allocation exclusively.
         unsafe {
-            self.allocator.free_offset(state.region.offset);
+            state.data.into_inner_data().free(&self.allocator);
         }
     }
 
@@ -159,7 +173,7 @@ impl<M> Bridge for SchedulerBindings<M> {
 
     fn tpu_drain(
         &mut self,
-        mut cb: impl FnMut(&mut Self, (TransactionId, &TransactionPtr)) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
         max_count: usize,
     ) {
         self.tpu_to_pack.sync();
@@ -175,16 +189,30 @@ impl<M> Bridge for SchedulerBindings<M> {
             let tx = unsafe {
                 TransactionPtr::from_sharable_transaction_region(&msg.transaction, &self.allocator)
             };
-            let id = self
-                .state
-                .insert(TransactionState { region: msg.transaction });
 
-            // Remove & free the TX if the scheduler doesn't want it.
-            if cb(self, (id, &tx)) == TxDecision::Drop {
-                self.state.remove(id).unwrap();
+            // Sanitize the transaction, drop it immediately if it fails sanitization.
+            let Ok(tx) = SanitizedTransactionView::try_new_sanitized(tx, true) else {
                 // SAFETY:
                 // - We own `tx` exclusively.
-                unsafe { tx.free(&self.allocator) };
+                // - The previous `TransactionPtr` has been dropped by `try_new_sanitized`.
+                unsafe {
+                    self.allocator.free_offset(msg.transaction.offset);
+                }
+
+                // TODO: Metrics.
+
+                continue;
+            };
+
+            // Get the ID so the caller can store it for later use.
+            let id = self.state.insert(TransactionState { data: tx, keys: None });
+
+            // Remove & free the TX if the scheduler doesn't want it.
+            if cb(self, id) == TxDecision::Drop {
+                let state = self.state.remove(id).unwrap();
+                // SAFETY:
+                // - We own `tx` exclusively.
+                unsafe { state.data.into_inner_data().free(&self.allocator) };
             }
         }
 
@@ -236,53 +264,28 @@ impl<M> Bridge for SchedulerBindings<M> {
                     _ => panic!(),
                 };
 
-                self.worker_response.insert(WorkerResponsePointers {
-                    index: 0,
-                    transactions,
-                    metas,
-                    responses,
-                })
+                self.worker_response
+                    .insert(WorkerResponsePointers { index: 0, metas, responses })
             }
         };
 
         // SAFETY
         // - We took care to allocate these correctly originally.
-        let (tx, KeyedTransactionMeta { key, meta }) = unsafe {
-            let region = ptrs.transactions.add(ptrs.index).read();
-            let tx = TransactionPtr::from_sharable_transaction_region(&region, &self.allocator);
-            let meta = ptrs.metas.add(ptrs.index).read();
+        let KeyedTransactionMeta { key, meta } = unsafe { ptrs.metas.add(ptrs.index).read() };
 
-            (tx, meta)
-        };
-
-        match ptrs.responses {
+        let decision = match ptrs.responses {
             WorkerResponseBatch::Unprocessed => {
-                let rep =
-                    WorkerResponse { key, data: &tx, meta, response: WorkerAction::Unprocessed };
+                let rep = WorkerResponse { key, meta, response: WorkerAction::Unprocessed };
 
-                if cb(self, rep) == TxDecision::Drop {
-                    // SAFETY
-                    // - We own `tx` exclusively.
-                    unsafe {
-                        tx.free(&self.allocator);
-                    };
-                }
+                cb(self, rep)
             }
             WorkerResponseBatch::Execution(rep) => {
                 // SAFETY
                 // - We trust Agave to have correctly allocated the responses.
                 let rep = unsafe { rep.add(ptrs.index).read() };
-                let rep =
-                    WorkerResponse { key, data: &tx, meta, response: WorkerAction::Execute(rep) };
+                let rep = WorkerResponse { key, meta, response: WorkerAction::Execute(rep) };
 
-                if cb(self, rep) == TxDecision::Drop {
-                    self.state.remove(key).unwrap();
-                    // SAFETY
-                    // - We own `tx` exclusively.
-                    unsafe {
-                        tx.free(&self.allocator);
-                    };
-                }
+                cb(self, rep)
             }
             WorkerResponseBatch::Check(rep) => {
                 // SAFETY
@@ -297,24 +300,33 @@ impl<M> Bridge for SchedulerBindings<M> {
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
 
-                let rep = WorkerResponse {
-                    key,
-                    data: &tx,
-                    meta,
-                    response: WorkerAction::Check(rep, keys.as_ref()),
-                };
+                let rep =
+                    WorkerResponse { key, meta, response: WorkerAction::Check(rep, keys.as_ref()) };
 
-                if cb(self, rep) == TxDecision::Drop {
+                let decision = cb(self, rep);
+                if decision == TxDecision::Drop
+                    && let Some(keys) = keys
+                {
                     // SAFETY
                     // - We own these pointers/allocations exclusively.
                     unsafe {
-                        tx.free(&self.allocator);
-                        if let Some(keys) = keys {
-                            keys.free(&self.allocator);
-                        }
+                        keys.free(&self.allocator);
                     }
                 }
+
+                decision
             }
+        };
+
+        // Remove the tx from state & drop the allocation if requested.
+        if decision == TxDecision::Drop {
+            let state = self.state.remove(key).unwrap();
+
+            // SAFETY
+            // - We own `tx` exclusively.
+            unsafe {
+                state.data.into_inner_data().free(&self.allocator);
+            };
         }
 
         true
@@ -346,10 +358,6 @@ struct KeyedTransactionMeta<M> {
     meta: M,
 }
 
-struct TransactionState {
-    region: SharableTransactionRegion,
-}
-
 pub struct SchedulerWorker(ClientWorkerSession);
 
 impl Worker for SchedulerWorker {
@@ -368,7 +376,6 @@ impl Worker for SchedulerWorker {
 
 struct WorkerResponsePointers<M> {
     index: usize,
-    transactions: NonNull<SharableTransactionRegion>,
     metas: NonNull<KeyedTransactionMeta<M>>,
     responses: WorkerResponseBatch,
 }

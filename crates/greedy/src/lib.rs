@@ -1,289 +1,215 @@
 #[macro_use]
 extern crate static_assertions;
 
-mod transaction_map;
-
-use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
-    self, fee_payer_balance_flags, not_included_reasons, parsing_and_sanitization_flags,
-    resolve_flags, status_check_flags,
+    CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
+    parsing_and_sanitization_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{
-    IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
-    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
-    WorkerToPackMessage, pack_message_flags, processed_codes,
+    IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, SharableTransactionRegion, pack_message_flags,
 };
-use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
-use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
-use agave_scheduling_utils::responses_region::{CheckResponsesPtr, ExecutionResponsesPtr};
-use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
-use agave_transaction_view::transaction_view::{SanitizedTransactionView, TransactionView};
+use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::transaction_view::SanitizedTransactionView;
+use bridge::{
+    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+};
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
-use rts_alloc::Allocator;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
-use solana_fee::FeeFeatures;
 use solana_fee_structure::FeeBudgetLimits;
 use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::transaction_map::{TransactionMap, TransactionStateKey};
-
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
-const STATE_CAPACITY: usize = UNCHECKED_CAPACITY + CHECKED_CAPACITY;
 
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
 const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE;
 const_assert!(TX_BATCH_SIZE < 4096);
-const TX_BATCH_META_OFFSET: usize = TX_REGION_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
 
+const CHECK_WORKER: usize = 0;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
-pub struct GreedyQueues {
-    tpu_to_pack: shaq::Consumer<TpuToPackMessage>,
-    progress_tracker: shaq::Consumer<ProgressMessage>,
-    workers: Vec<ClientWorkerSession>,
-}
-
 pub struct GreedyScheduler {
-    allocator: Allocator,
-
-    progress: ProgressMessage,
-    runtime: RuntimeState,
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
-    state: TransactionMap,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
+    schedule_batch: Vec<TransactionId>,
 
     metrics: GreedyMetrics,
 }
 
 impl GreedyScheduler {
     #[must_use]
-    pub fn new(
-        ClientSession { mut allocators, tpu_to_pack, progress_tracker, workers }: ClientSession,
-    ) -> (Self, GreedyQueues) {
-        assert_eq!(allocators.len(), 1, "invalid number of allocators");
+    pub fn new() -> Self {
+        Self {
+            unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            cu_in_flight: 0,
+            schedule_locks: HashMap::default(),
+            schedule_batch: Vec::default(),
 
-        (
-            Self {
-                allocator: allocators.remove(0),
-
-                progress: ProgressMessage {
-                    leader_state: 0,
-                    current_slot: 0,
-                    next_leader_slot: u64::MAX,
-                    leader_range_end: u64::MAX,
-                    remaining_cost_units: 0,
-                    current_slot_progress: 0,
-                },
-                runtime: RuntimeState {
-                    feature_set: FeatureSet::all_enabled(),
-                    fee_features: FeeFeatures { enable_secp256r1_precompile: true },
-                    lamports_per_signature: 5000,
-                    burn_percent: 50,
-                },
-                unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                state: TransactionMap::with_capacity(STATE_CAPACITY),
-                cu_in_flight: 0,
-                schedule_locks: HashMap::default(),
-
-                metrics: GreedyMetrics::new(),
-            },
-            GreedyQueues { tpu_to_pack, progress_tracker, workers },
-        )
+            metrics: GreedyMetrics::new(),
+        }
     }
 
-    pub fn poll(&mut self, queues: &mut GreedyQueues) {
+    pub fn poll<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         // Drain the progress tracker so we know which slot we're on.
-        self.drain_progress(queues);
-        let is_leader = self.progress.leader_state == IS_LEADER;
+        bridge.drain_progress();
+        let is_leader = bridge.progress().leader_state == IS_LEADER;
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
         // expired TXs). If we do this we should use a dense slotmap to make
         // iteration fast.
 
         // Drain responses from workers.
-        self.drain_worker_responses(queues);
+        self.drain_worker_responses(bridge);
 
         // Ingest a bounded amount of new transactions.
         match is_leader {
-            true => self.drain_tpu(queues, 128),
-            false => self.drain_tpu(queues, 1024),
+            true => self.drain_tpu(bridge, 128),
+            false => self.drain_tpu(bridge, 1024),
         }
 
         // Queue additional checks.
-        self.schedule_checks(queues);
+        self.schedule_checks(bridge);
 
         // Schedule if we're currently the leader.
         if is_leader {
-            self.schedule_execute(queues);
+            self.schedule_execute(bridge);
         }
 
         // Update metrics.
-        self.metrics.slot.set(self.progress.current_slot as f64);
+        self.metrics.slot.set(bridge.progress().current_slot as f64);
         self.metrics
             .next_leader_slot
-            .set(self.progress.next_leader_slot as f64);
+            .set(bridge.progress().next_leader_slot as f64);
         self.metrics.unchecked_len.set(self.unchecked.len() as f64);
         self.metrics.checked_len.set(self.checked.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
-    fn drain_progress(&mut self, queues: &mut GreedyQueues) {
-        queues.progress_tracker.sync();
-        while let Some(msg) = queues.progress_tracker.try_read() {
-            self.progress = *msg;
-        }
-        queues.progress_tracker.finalize();
-    }
-
-    fn drain_worker_responses(&mut self, queues: &mut GreedyQueues) {
-        for worker in &mut queues.workers {
-            worker.worker_to_pack.sync();
-            while let Some(msg) = worker.worker_to_pack.try_read() {
-                match msg.processed_code {
-                    processed_codes::MAX_WORKING_SLOT_EXCEEDED => {
-                        // SAFETY
-                        // - Trust Agave to not have modified/freed this pointer.
-                        unsafe {
-                            self.allocator
-                                .free_offset(msg.responses.transaction_responses_offset);
-                        }
-
-                        continue;
-                    }
-                    processed_codes::PROCESSED => {}
-                    _ => panic!(),
+    fn drain_worker_responses<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        for worker in 0..5 {
+            while bridge.pop_worker(worker, |bridge, WorkerResponse { meta, response, .. }| {
+                match response {
+                    WorkerAction::Unprocessed => TxDecision::Keep,
+                    WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
+                    WorkerAction::Execute(rep) => self.on_execute(meta, rep),
                 }
-
-                match msg.responses.tag {
-                    worker_message_types::CHECK_RESPONSE => self.on_check(msg),
-                    worker_message_types::EXECUTION_RESPONSE => self.on_execute(msg),
-                    _ => panic!(),
-                }
-            }
-            worker.worker_to_pack.finalize();
+            }) {}
         }
     }
 
-    fn drain_tpu(&mut self, queues: &mut GreedyQueues, max: usize) {
-        queues.tpu_to_pack.sync();
-
-        let additional = std::cmp::min(queues.tpu_to_pack.len(), max);
+    fn drain_tpu<B>(&mut self, bridge: &mut B, max_count: usize)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let additional = std::cmp::min(bridge.tpu_len(), max_count);
         let shortfall = (self.checked.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
 
         // NB: Technically we are evicting more than we need to because not all of
         // `additional` will parse correctly & thus have a priority.
         for _ in 0..shortfall {
             let id = self.unchecked.pop_min().unwrap();
-            // SAFETY:
-            // - Trust Agave to behave correctly and not free these transactions.
-            // - We have not previously freed this transaction.
-            unsafe { self.state.remove(&self.allocator, id.key) };
+
+            bridge.tx_drop(id.key);
         }
         self.metrics.recv_evict.increment(shortfall as u64);
 
         // TODO: Need to dedupe already seen transactions?
 
-        let mut ok = 0;
-        let mut err = 0;
-        for _ in 0..additional {
-            let msg = queues.tpu_to_pack.try_read().unwrap();
-
-            match Self::calculate_priority(&self.runtime, &self.allocator, msg) {
-                Some((view, priority, cost)) => {
-                    let key = self.state.insert(msg.transaction, view);
+        bridge.tpu_drain(
+            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+                Some((priority, cost)) => {
                     self.unchecked.push(PriorityId { priority, cost, key });
-                    ok += 1;
-                }
-                // SAFETY:
-                // - Trust Agave to have correctly allocated & trenferred ownership of this
-                //   transaction region to us.
-                None => unsafe {
-                    self.allocator.free_offset(msg.transaction.offset);
-                    err += 1;
-                },
-            }
-        }
-        queues.tpu_to_pack.finalize();
+                    self.metrics.recv_ok.increment(1);
 
-        // Commit metrics.
-        self.metrics.recv_ok.increment(ok);
-        self.metrics.recv_err.increment(err);
+                    TxDecision::Keep
+                }
+                None => {
+                    self.metrics.recv_err.increment(1);
+
+                    TxDecision::Drop
+                }
+            },
+            max_count,
+        );
     }
 
-    fn schedule_checks(&mut self, queues: &mut GreedyQueues) {
-        let queue = &mut queues.workers[0].pack_to_worker;
-        queue.sync();
-
+    fn schedule_checks<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         // Loop until worker queue is filled or backlog is empty.
-        let start_rem = queue.capacity() - queue.len();
-        for _ in 0..start_rem {
+        let start_len = self.unchecked.len();
+        while bridge.worker(0).rem() > 0 {
             if self.unchecked.is_empty() {
                 break;
             }
 
-            queue
-                .try_write(PackToWorkerMessage {
-                    flags: pack_message_flags::CHECK
-                        | check_flags::STATUS_CHECKS
-                        | check_flags::LOAD_FEE_PAYER_BALANCE
-                        | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-                    max_working_slot: u64::MAX,
-                    batch: Self::collect_batch(&self.allocator, || {
-                        self.unchecked
-                            .pop_max()
-                            .map(|id| (id, self.state[id.key].shared))
-                    }),
-                })
-                .unwrap();
+            self.schedule_batch.clear();
+            self.schedule_batch
+                .extend(std::iter::from_fn(|| self.unchecked.pop_max().map(|id| id.key)));
+            bridge.schedule(
+                CHECK_WORKER,
+                &self.schedule_batch,
+                u64::MAX,
+                pack_message_flags::CHECK
+                    | check_flags::STATUS_CHECKS
+                    | check_flags::LOAD_FEE_PAYER_BALANCE
+                    | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
+            );
         }
-        queue.commit();
 
         // Update metrics with our scheduled amount.
-        let new_rem = queue.capacity() - queue.len();
         self.metrics
             .check_requested
-            .increment((start_rem - new_rem) as u64);
+            .increment((self.unchecked.len() - start_len) as u64);
     }
 
-    fn schedule_execute(&mut self, queues: &mut GreedyQueues) {
+    fn schedule_execute<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         self.schedule_locks.clear();
 
-        debug_assert_eq!(self.progress.leader_state, IS_LEADER);
+        debug_assert_eq!(bridge.progress().leader_state, IS_LEADER);
         let budget_percentage =
-            std::cmp::min(self.progress.current_slot_progress + BLOCK_FILL_CUTOFF, 100);
+            std::cmp::min(bridge.progress().current_slot_progress + BLOCK_FILL_CUTOFF, 100);
         // TODO: Would be ideal for the scheduler protocol to tell us the max block
         // units.
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
-            .saturating_sub(self.progress.remaining_cost_units)
+            .saturating_sub(bridge.progress().remaining_cost_units)
             + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
-        for worker in &mut queues.workers[1..] {
+        for worker in 1..bridge.worker_len() {
             if budget_remaining == 0 || self.checked.is_empty() {
-                return;
+                break;
             }
 
             // If the worker already has a pending job, don't give it any more.
-            worker.pack_to_worker.sync();
-            if !worker.pack_to_worker.is_empty() {
+            if bridge.worker(worker).len() > 0 {
                 continue;
             }
 
-            let batch = Self::collect_batch(&self.allocator, || {
+            let pop_next = || {
                 self.checked
                     .pop_max()
                     .filter(|id| {
@@ -296,7 +222,7 @@ impl GreedyScheduler {
 
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
-                        let tx = &self.state[id.key];
+                        let tx = bridge.tx(id.key);
                         if tx
                             .write_locks()
                             .any(|key| self.schedule_locks.insert(*key, true).is_some())
@@ -314,253 +240,102 @@ impl GreedyScheduler {
 
                         // Update the budget as we are scheduling this TX.
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
+                        self.cu_in_flight += id.cost;
 
                         true
                     })
-                    .map(|id| {
-                        self.cu_in_flight += id.cost;
+                    .map(|id| id.key)
+            };
 
-                        (id, self.state[id.key].shared)
-                    })
-            });
+            self.schedule_batch.clear();
+            self.schedule_batch.extend(std::iter::from_fn(pop_next));
 
             // If we failed to schedule anything, don't send the batch.
-            if batch.num_transactions == 0 {
-                return;
+            if self.schedule_batch.is_empty() {
+                break;
             }
 
             // Update metrics.
             self.metrics
                 .execute_requested
-                .increment(u64::from(batch.num_transactions));
+                .increment(self.schedule_batch.len() as u64);
 
             // Write the next batch for the worker.
-            worker
-                .pack_to_worker
-                .try_write(PackToWorkerMessage {
-                    flags: pack_message_flags::EXECUTE,
-                    max_working_slot: self.progress.current_slot + 1,
-                    batch,
-                })
-                .unwrap();
-            worker.pack_to_worker.commit();
-        }
-    }
-
-    fn on_check(&mut self, msg: &WorkerToPackMessage) {
-        // SAFETY:
-        // - Trust Agave to have allocated the batch/responses properly & told us the
-        //   correct size.
-        // - Use the correct wrapper type (check response ptr).
-        // - Don't duplicate wrappers so we cannot double free.
-        let (batch, responses) = unsafe {
-            (
-                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                    &msg.batch,
-                    &self.allocator,
-                ),
-                CheckResponsesPtr::from_transaction_response_region(
-                    &msg.responses,
-                    &self.allocator,
-                ),
-            )
-        };
-        assert_eq!(batch.len(), responses.len());
-
-        let mut ok = 0;
-        let mut err = 0;
-        let mut evicted = 0;
-        for ((_, id), rep) in batch.iter().zip(responses.iter().copied()) {
-            let parsing_failed =
-                rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
-            let resolve_failed = rep.resolve_flags & resolve_flags::FAILED != 0;
-            let status_ok = status_check_flags::REQUESTED | status_check_flags::PERFORMED;
-            let status_failed = rep.status_check_flags & !status_ok != 0;
-            if parsing_failed || resolve_failed || status_failed {
-                // SAFETY:
-                // - TX was previously allocated with this allocator.
-                // - Trust Agave to not free this TX while returning it to us.
-                unsafe {
-                    self.state.remove(&self.allocator, id.key);
-                }
-
-                // Update local metric tracker.
-                err += 1;
-
-                continue;
-            }
-
-            // Sanity check the flags.
-            assert_eq!(
-                rep.fee_payer_balance_flags,
-                fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED,
-                "{rep:?}"
+            bridge.schedule(
+                worker,
+                &self.schedule_batch,
+                bridge.progress().current_slot + 1,
+                pack_message_flags::EXECUTE,
             );
-            assert_eq!(
-                rep.resolve_flags,
-                resolve_flags::REQUESTED | resolve_flags::PERFORMED,
-                "{rep:?}"
-            );
-            assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
-            assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
-
-            // Evict lowest priority if at capacity.
-            if self.checked.len() == CHECKED_CAPACITY {
-                let id = self.checked.pop_min().unwrap();
-                // SAFETY
-                // - We have not previously freed the underlying transaction/pubkey objects.
-                unsafe { self.state.remove(&self.allocator, id.key) };
-
-                evicted += 1;
-            }
-
-            // Insert the new transaction (yes this may be lower priority then what
-            // we just evicted but that's fine).
-            self.checked.push(id);
-
-            // Update the state to include the resolved pubkeys.
-            //
-            // SAFETY
-            // - Trust Agave to have allocated the pubkeys properly & transferred ownership
-            //   to us.
-            if rep.resolved_pubkeys.num_pubkeys > 0 {
-                self.state[id.key].resolved = Some(unsafe {
-                    PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
-                });
-            }
-
-            // Update metric.
-            ok += 1;
         }
-
-        // Free both containers.
-        //
-        // SAFETY:
-        // - We exclusively own these containers and have not created any copies.
-        unsafe {
-            batch.free();
-            responses.free(&self.allocator);
-        }
-
-        // Commit metrics.
-        self.metrics.check_ok.increment(ok);
-        self.metrics.check_err.increment(err);
-        self.metrics.check_evict.increment(evicted);
     }
 
-    fn on_execute(&mut self, msg: &WorkerToPackMessage) {
-        // SAFETY:
-        // - Trust Agave to have allocated the batch/responses properly & told us the
-        //   correct size.
-        // - Use the correct wrapper type (execute response ptr).
-        // - Don't duplicate wrappers so we cannot double free.
-        let (batch, responses) = unsafe {
-            (
-                TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                    &msg.batch,
-                    &self.allocator,
-                ),
-                ExecutionResponsesPtr::from_transaction_response_region(
-                    &msg.responses,
-                    &self.allocator,
-                ),
-            )
-        };
+    fn on_check<B>(&mut self, bridge: &mut B, meta: PriorityId, rep: CheckResponse) -> TxDecision
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let parsing_failed =
+            rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
+        let resolve_failed = rep.resolve_flags & resolve_flags::FAILED != 0;
+        let status_ok = status_check_flags::REQUESTED | status_check_flags::PERFORMED;
+        let status_failed = rep.status_check_flags & !status_ok != 0;
+        if parsing_failed || resolve_failed || status_failed {
+            self.metrics.check_err.increment(1);
 
-        // Remove in-flight costs and free all transactions.
-        let mut ok = 0;
-        let mut err = 0;
-        for ((tx, id), rep) in batch.iter().zip(responses.iter()) {
-            self.cu_in_flight -= id.cost;
-
-            // SAFETY:
-            // - Trust Agave not to have already freed this transaction as we are the owner.
-            unsafe { tx.free(&self.allocator) };
-
-            // Update metrics.
-            let included = rep.not_included_reason == not_included_reasons::NONE;
-            ok += u64::from(included);
-            err += u64::from(!included);
+            return TxDecision::Drop;
         }
 
-        // Free the containers.
-        //
-        // SAFETY:
-        // - We exclusively own these containers.
-        unsafe {
-            batch.free();
-            self.allocator
-                .free_offset(msg.responses.transaction_responses_offset);
+        // Sanity check the flags.
+        assert_eq!(
+            rep.fee_payer_balance_flags,
+            fee_payer_balance_flags::REQUESTED | fee_payer_balance_flags::PERFORMED,
+            "{rep:?}"
+        );
+        assert_eq!(
+            rep.resolve_flags,
+            resolve_flags::REQUESTED | resolve_flags::PERFORMED,
+            "{rep:?}"
+        );
+        assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
+        assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
+
+        // Evict lowest priority if at capacity.
+        if self.checked.len() == CHECKED_CAPACITY {
+            let id = self.checked.pop_min().unwrap();
+            bridge.tx_drop(id.key);
+
+            self.metrics.check_evict.increment(1);
         }
 
-        // Commit metrics.
-        self.metrics.execute_ok.increment(ok);
-        self.metrics.execute_err.increment(err);
+        // Insert the new transaction (yes this may be lower priority then what
+        // we just evicted but that's fine).
+        self.checked.push(meta);
+
+        // Update ok metric.
+        self.metrics.check_ok.increment(1);
+
+        TxDecision::Keep
     }
 
-    fn collect_batch(
-        allocator: &Allocator,
-        mut pop: impl FnMut() -> Option<(PriorityId, SharableTransactionRegion)>,
-    ) -> SharableTransactionBatchRegion {
-        // Allocate a batch that can hold all our transaction pointers.
-        let transactions = allocator.allocate(TX_BATCH_SIZE as u32).unwrap();
-        let transactions_offset = unsafe { allocator.offset(transactions) };
+    fn on_execute(&mut self, meta: PriorityId, rep: ExecutionResponse) -> TxDecision {
+        // Remove in-flight costs.
+        self.cu_in_flight -= meta.cost;
 
-        // Get our two pointers to the TX region & meta region.
-        let tx_ptr = allocator
-            .ptr_from_offset(transactions_offset)
-            .cast::<SharableTransactionRegion>();
-        // SAFETY:
-        // - Pointer is guaranteed to not overrun the allocation as we just created it
-        //   with a sufficient size.
-        let meta_ptr = unsafe {
-            allocator
-                .ptr_from_offset(transactions_offset)
-                .byte_add(TX_BATCH_META_OFFSET)
-                .cast::<PriorityId>()
-        };
-
-        // Fill in the batch with transaction pointers.
-        let mut num_transactions = 0;
-        while num_transactions < MAX_TRANSACTIONS_PER_MESSAGE {
-            let Some((id, tx)) = pop() else {
-                break;
-            };
-
-            // SAFETY:
-            // - We have allocated the transaction batch to support at least
-            //   `MAX_TRANSACTIONS_PER_MESSAGE`, we terminate the loop before we overrun the
-            //   region.
-            unsafe {
-                tx_ptr.add(num_transactions).write(tx);
-                meta_ptr.add(num_transactions).write(id);
-            };
-
-            num_transactions += 1;
+        // Update metrics.
+        match rep.not_included_reason == not_included_reasons::NONE {
+            true => self.metrics.execute_ok.increment(1),
+            false => self.metrics.execute_err.increment(1),
         }
 
-        SharableTransactionBatchRegion {
-            num_transactions: num_transactions.try_into().unwrap(),
-            transactions_offset,
-        }
+        TxDecision::Drop
     }
 
     fn calculate_priority(
         runtime: &RuntimeState,
-        allocator: &Allocator,
-        msg: &TpuToPackMessage,
-    ) -> Option<(TransactionView<true, TransactionPtr>, u64, u32)> {
-        let tx = SanitizedTransactionView::try_new_sanitized(
-            // SAFETY:
-            // - Trust Agave to have allocated the shared transactin region correctly.
-            // - `SanitizedTransactionView` does not free the allocation on drop.
-            unsafe {
-                TransactionPtr::from_sharable_transaction_region(&msg.transaction, allocator)
-            },
-            true,
-        )
-        .ok()?;
-        let tx = RuntimeTransaction::<TransactionView<true, TransactionPtr>>::try_from(
+        tx: &SanitizedTransactionView<TransactionPtr>,
+    ) -> Option<(u64, u32)> {
+        // Construct runtime transaction.
+        let tx = RuntimeTransaction::<&SanitizedTransactionView<TransactionPtr>>::try_new(
             tx,
             MessageHash::Compute,
             None,
@@ -595,7 +370,6 @@ impl GreedyScheduler {
 
         // Compute priority.
         Some((
-            tx.into_inner_transaction(),
             reward
                 .saturating_mul(1_000_000)
                 .saturating_div(cost.saturating_add(1)),
@@ -646,19 +420,12 @@ impl GreedyMetrics {
     }
 }
 
-struct RuntimeState {
-    feature_set: FeatureSet,
-    fee_features: FeeFeatures,
-    lamports_per_signature: u64,
-    burn_percent: u64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct PriorityId {
+pub struct PriorityId {
     priority: u64,
     cost: u32,
-    key: TransactionStateKey,
+    key: TransactionId,
 }
 
 impl PartialOrd for PriorityId {
@@ -676,6 +443,7 @@ impl Ord for PriorityId {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::os::fd::IntoRawFd;
@@ -1208,3 +976,4 @@ mod tests {
         .unwrap()
     }
 }
+*/
