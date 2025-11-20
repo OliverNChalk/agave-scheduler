@@ -91,12 +91,24 @@ where
         self.tpu_queue.push_back(key);
     }
 
-    pub fn queue_response(
+    pub fn queue_check_response(
         &mut self,
         batch: &ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
-        response: WorkerResponse<'static, M>,
+        index: usize,
+        keys: Option<PubkeysPtr>,
     ) {
-        self.worker_queues[batch.worker].push_back(response);
+        let tx = batch.transactions[index];
+
+        // Insert the keys (if any).
+        self.state[tx.key].keys = keys;
+        let state = &self.state[tx.key];
+
+        self.worker_queues[batch.worker].push_back(WorkerResponse {
+            key: tx.key,
+            meta: tx.meta,
+            // TODO: Need WorkerActionTest or something that doesn't take a ref until JIT.
+            response: WorkerAction::Check(self.check_ok(), state.keys.as_ref()),
+        });
     }
 
     pub fn queue_all_checks_ok(&mut self) {
@@ -125,7 +137,7 @@ where
     }
 
     #[must_use]
-    pub fn check_ok(&self, resolved_pubkeys: SharablePubkeys) -> CheckResponse {
+    pub fn check_ok(&self) -> CheckResponse {
         CheckResponse {
             parsing_and_sanitization_flags: 0,
             status_check_flags: status_check_flags::REQUESTED | status_check_flags::PERFORMED,
@@ -137,7 +149,7 @@ where
             fee_payer_balance: u64::from(u32::MAX),
             resolution_slot: self.progress.current_slot,
             min_alt_deactivation_slot: u64::MAX,
-            resolved_pubkeys,
+            resolved_pubkeys: SharablePubkeys { offset: 0, num_pubkeys: 0 },
         }
     }
 }

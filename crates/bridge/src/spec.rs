@@ -91,6 +91,7 @@ slotmap::new_key_type! {
     pub struct TransactionId;
 }
 
+#[derive(Debug)]
 pub struct TransactionState {
     pub data: SanitizedTransactionView<TransactionPtr>,
     pub keys: Option<PubkeysPtr>,
