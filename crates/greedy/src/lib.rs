@@ -12,8 +12,8 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use bridge::{
-    Bridge, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker, WorkerAction,
-    WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker,
+    WorkerAction, WorkerResponse,
 };
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
@@ -44,7 +44,7 @@ pub struct GreedyScheduler {
     checked: MinMaxHeap<PriorityId>,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
-    schedule_batch: Vec<TransactionId>,
+    schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
 
     metrics: GreedyMetrics,
 }
@@ -165,8 +165,11 @@ impl GreedyScheduler {
             }
 
             self.schedule_batch.clear();
-            self.schedule_batch
-                .extend(std::iter::from_fn(|| self.unchecked.pop_max().map(|id| id.key)));
+            self.schedule_batch.extend(std::iter::from_fn(|| {
+                self.unchecked
+                    .pop_max()
+                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
+            }));
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
                 transactions: &self.schedule_batch,
@@ -245,7 +248,7 @@ impl GreedyScheduler {
 
                         true
                     })
-                    .map(|id| id.key)
+                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
             };
 
             self.schedule_batch.clear();

@@ -16,8 +16,8 @@ use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
 use crate::{
-    Bridge, RuntimeState, ScheduleBatch, TransactionId, TransactionState, TxDecision, Worker,
-    WorkerAction, WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
+    TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 
 pub struct SchedulerBindings<M> {
@@ -32,7 +32,10 @@ pub struct SchedulerBindings<M> {
     worker_response: Option<WorkerResponsePointers<M>>,
 }
 
-impl<M> SchedulerBindings<M> {
+impl<M> SchedulerBindings<M>
+where
+    M: Copy,
+{
     // TODO: Duplicated from scheduling_utils::transaction_ptr.
     const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
     const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
@@ -76,7 +79,7 @@ impl<M> SchedulerBindings<M> {
     fn collect_batch(
         allocator: &Allocator,
         state: &SlotMap<TransactionId, TransactionState>,
-        batch: &[TransactionId],
+        batch: &[KeyedTransactionMeta<M>],
     ) -> SharableTransactionBatchRegion {
         assert!(batch.len() <= MAX_TRANSACTIONS_PER_MESSAGE);
 
@@ -95,12 +98,12 @@ impl<M> SchedulerBindings<M> {
             allocator
                 .ptr_from_offset(transactions_offset)
                 .byte_add(Self::TX_BATCH_META_OFFSET)
-                .cast::<TransactionId>()
+                .cast::<KeyedTransactionMeta<M>>()
         };
 
         // Fill in the batch with transaction pointers.
-        for (i, id) in batch.iter().copied().enumerate() {
-            let tx = &state[id];
+        for (i, meta) in batch.iter().copied().enumerate() {
+            let tx = &state[meta.key];
 
             // SAFETY
             // - We have allocated the transaction batch to support at least
@@ -112,8 +115,7 @@ impl<M> SchedulerBindings<M> {
                         .inner_data()
                         .to_sharable_transaction_region(allocator),
                 );
-                // OLI: We are not wrting meta like we should.
-                meta_ptr.add(i).write(id);
+                meta_ptr.add(i).write(meta);
             };
         }
 
@@ -124,7 +126,10 @@ impl<M> SchedulerBindings<M> {
     }
 }
 
-impl<M> Bridge for SchedulerBindings<M> {
+impl<M> Bridge for SchedulerBindings<M>
+where
+    M: Copy,
+{
     type Worker = SchedulerWorker;
     type Meta = M;
 
@@ -336,7 +341,7 @@ impl<M> Bridge for SchedulerBindings<M> {
     fn schedule(
         &mut self,
         ScheduleBatch { worker, transactions: batch, max_working_slot, flags }: ScheduleBatch<
-            &[TransactionId],
+            &[KeyedTransactionMeta<M>],
         >,
     ) {
         let queue = &mut self.workers[worker].0.pack_to_worker;
@@ -351,11 +356,6 @@ impl<M> Bridge for SchedulerBindings<M> {
             .unwrap();
         queue.commit();
     }
-}
-
-struct KeyedTransactionMeta<M> {
-    key: TransactionId,
-    meta: M,
 }
 
 pub struct SchedulerWorker(ClientWorkerSession);

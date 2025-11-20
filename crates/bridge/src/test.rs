@@ -4,8 +4,8 @@ use agave_scheduler_bindings::ProgressMessage;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
-    Bridge, RuntimeState, ScheduleBatch, TransactionId, TransactionState, TxDecision, Worker,
-    WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
+    TxDecision, Worker, WorkerResponse,
 };
 
 #[derive(Debug)]
@@ -87,7 +87,7 @@ impl<M> Bridge for TestBridge<M> {
         todo!()
     }
 
-    fn schedule(&mut self, batch: ScheduleBatch<&[TransactionId]>) {
+    fn schedule(&mut self, batch: ScheduleBatch<&[KeyedTransactionMeta<M>]>) {
         todo!()
     }
 }

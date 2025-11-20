@@ -6,7 +6,8 @@ use agave_scheduler_bindings::worker_message_types::{
 };
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
 use bridge::{
-    Bridge, ScheduleBatch, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+    Bridge, KeyedTransactionMeta, ScheduleBatch, TransactionId, TxDecision, Worker, WorkerAction,
+    WorkerResponse,
 };
 
 const CHECK_WORKER: usize = 0;
@@ -16,12 +17,12 @@ pub struct FifoScheduler<B> {
     bridge: B,
     check_queue: VecDeque<TransactionId>,
     execute_queue: VecDeque<TransactionId>,
-    batch: Vec<TransactionId>,
+    batch: Vec<KeyedTransactionMeta<()>>,
 }
 
 impl<B> FifoScheduler<B>
 where
-    B: Bridge,
+    B: Bridge<Meta = ()>,
 {
     #[must_use]
     pub fn new(bridge: B) -> Self {
@@ -93,7 +94,8 @@ where
             self.batch.clear();
             self.batch.extend(
                 std::iter::from_fn(|| self.check_queue.pop_front())
-                    .take(MAX_TRANSACTIONS_PER_MESSAGE),
+                    .take(MAX_TRANSACTIONS_PER_MESSAGE)
+                    .map(|key| KeyedTransactionMeta { key, meta: () }),
             );
             self.bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
@@ -113,7 +115,8 @@ where
             self.batch.clear();
             self.batch.extend(
                 std::iter::from_fn(|| self.execute_queue.pop_front())
-                    .take(MAX_TRANSACTIONS_PER_MESSAGE),
+                    .take(MAX_TRANSACTIONS_PER_MESSAGE)
+                    .map(|key| KeyedTransactionMeta { key, meta: () }),
             );
             self.bridge.schedule(ScheduleBatch {
                 worker: EXECUTE_WORKER,

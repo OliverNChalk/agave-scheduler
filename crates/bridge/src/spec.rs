@@ -39,7 +39,7 @@ pub trait Bridge {
         cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool;
 
-    fn schedule(&mut self, batch: ScheduleBatch<&[TransactionId]>);
+    fn schedule(&mut self, batch: ScheduleBatch<&[KeyedTransactionMeta<Self::Meta>]>);
 }
 
 pub struct RuntimeState {
@@ -77,6 +77,12 @@ pub enum WorkerAction<'a> {
     Unprocessed,
     Check(CheckResponse, Option<&'a PubkeysPtr>),
     Execute(ExecutionResponse),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct KeyedTransactionMeta<M> {
+    pub key: TransactionId,
+    pub meta: M,
 }
 
 slotmap::new_key_type! {
