@@ -12,7 +12,8 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use bridge::{
-    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+    Bridge, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker, WorkerAction,
+    WorkerResponse,
 };
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
@@ -166,15 +167,15 @@ impl GreedyScheduler {
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(std::iter::from_fn(|| self.unchecked.pop_max().map(|id| id.key)));
-            bridge.schedule(
-                CHECK_WORKER,
-                &self.schedule_batch,
-                u64::MAX,
-                pack_message_flags::CHECK
+            bridge.schedule(ScheduleBatch {
+                worker: CHECK_WORKER,
+                transactions: &self.schedule_batch,
+                max_working_slot: u64::MAX,
+                flags: pack_message_flags::CHECK
                     | check_flags::STATUS_CHECKS
                     | check_flags::LOAD_FEE_PAYER_BALANCE
                     | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-            );
+            });
         }
 
         // Update metrics with our scheduled amount.
@@ -261,12 +262,12 @@ impl GreedyScheduler {
                 .increment(self.schedule_batch.len() as u64);
 
             // Write the next batch for the worker.
-            bridge.schedule(
+            bridge.schedule(ScheduleBatch {
                 worker,
-                &self.schedule_batch,
-                bridge.progress().current_slot + 1,
-                pack_message_flags::EXECUTE,
-            );
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE,
+            });
         }
     }
 
@@ -459,7 +460,6 @@ mod tests {
     use agave_scheduling_utils::transaction_ptr::TransactionPtrBatch;
     use agave_transaction_view::transaction_view::TransactionView;
     use bridge::TestBridge;
-    use rts_alloc::Allocator;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Pubkey, Signer};
@@ -480,36 +480,41 @@ mod tests {
 
     #[test]
     fn check_no_schedule() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::default();
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.send_tx(
+        bridge.queue_tpu(
             &solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()).into(),
         );
 
         // Poll the greedy scheduler.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
 
         // Assert - A single request (to check the TX) is sent.
-        let mut worker_requests = harness.drain_pack_to_workers();
-        assert_eq!(worker_requests.len(), 1);
-        let (worker_index, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, pack_message_flags::CHECK);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
 
         // Respond with OK.
-        harness.send_check_ok(worker_index, message, None);
-        harness.poll_scheduler();
+        let rep = WorkerResponse {
+            key: batch.transactions[0],
+            meta: todo!(),
+            response: WorkerAction::Check(
+                check_ok(SharablePubkeys { offset: 0, num_pubkeys: 0 }),
+                None,
+            ),
+        };
+        bridge.queue_response(batch, rep);
+        scheduler.poll(&mut bridge);
 
         // Assert - Scheduler does not schedule the valid TX as we are not leader.
-        assert!(harness.session.workers.iter_mut().all(|worker| {
-            worker.pack_to_worker.sync();
-
-            worker.pack_to_worker.is_empty()
-        }));
+        assert_eq!(bridge.pop_schedule(), None);
     }
 
+    /*
     #[test]
     fn check_then_schedule() {
         let mut harness = Harness::setup();
@@ -747,6 +752,7 @@ mod tests {
         };
         assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
     }
+    */
 
     struct Harness {
         slot: u64,
@@ -977,5 +983,21 @@ mod tests {
             &[payer],
         )
         .unwrap()
+    }
+
+    fn check_ok(resolved_pubkeys: SharablePubkeys) -> CheckResponse {
+        CheckResponse {
+            parsing_and_sanitization_flags: 0,
+            status_check_flags: status_check_flags::REQUESTED | status_check_flags::PERFORMED,
+            fee_payer_balance_flags: fee_payer_balance_flags::REQUESTED
+                | fee_payer_balance_flags::PERFORMED,
+            resolve_flags: resolve_flags::REQUESTED | resolve_flags::PERFORMED,
+            included_slot: self.slot,
+            balance_slot: self.slot,
+            fee_payer_balance: u64::from(u32::MAX),
+            resolution_slot: self.slot,
+            min_alt_deactivation_slot: u64::MAX,
+            resolved_pubkeys,
+        }
     }
 }

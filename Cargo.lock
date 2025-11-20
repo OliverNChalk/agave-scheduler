@@ -622,6 +622,7 @@ dependencies = [
  "slotmap",
  "solana-fee",
  "solana-pubkey 3.0.0",
+ "solana-transaction",
 ]
 
 [[package]]

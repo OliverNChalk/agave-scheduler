@@ -39,13 +39,7 @@ pub trait Bridge {
         cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool;
 
-    fn schedule(
-        &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
-    );
+    fn schedule(&mut self, batch: ScheduleBatch<&[TransactionId]>);
 }
 
 pub struct RuntimeState {
@@ -53,6 +47,14 @@ pub struct RuntimeState {
     pub fee_features: FeeFeatures,
     pub lamports_per_signature: u64,
     pub burn_percent: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ScheduleBatch<T> {
+    pub worker: usize,
+    pub transactions: T,
+    pub max_working_slot: u64,
+    pub flags: u16,
 }
 
 pub trait Worker {

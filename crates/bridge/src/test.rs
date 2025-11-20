@@ -1,13 +1,33 @@
 use std::marker::PhantomData;
 
 use agave_scheduler_bindings::ProgressMessage;
+use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
-    Bridge, RuntimeState, TransactionId, TransactionState, TxDecision, Worker, WorkerResponse,
+    Bridge, RuntimeState, ScheduleBatch, TransactionId, TransactionState, TxDecision, Worker,
+    WorkerResponse,
 };
 
 #[derive(Debug)]
 pub struct TestBridge<M>(PhantomData<M>);
+
+impl<M> TestBridge<M> {
+    pub fn queue_tpu(&mut self, tx: &VersionedTransaction) {
+        todo!()
+    }
+
+    pub fn queue_response(
+        &mut self,
+        batch: ScheduleBatch<Vec<TransactionId>>,
+        response: WorkerResponse<'_, M>,
+    ) {
+        todo!()
+    }
+
+    pub fn pop_schedule(&mut self) -> Option<ScheduleBatch<Vec<TransactionId>>> {
+        todo!()
+    }
+}
 
 impl<M> Default for TestBridge<M> {
     fn default() -> Self {
@@ -39,7 +59,7 @@ impl<M> Bridge for TestBridge<M> {
         todo!()
     }
 
-    fn tx_remove(&mut self, key: TransactionId) {
+    fn tx_drop(&mut self, key: TransactionId) {
         todo!()
     }
 
@@ -67,13 +87,7 @@ impl<M> Bridge for TestBridge<M> {
         todo!()
     }
 
-    fn schedule(
-        &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
-    ) {
+    fn schedule(&mut self, batch: ScheduleBatch<&[TransactionId]>) {
         todo!()
     }
 }

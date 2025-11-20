@@ -5,7 +5,9 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
-use bridge::{Bridge, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse};
+use bridge::{
+    Bridge, ScheduleBatch, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+};
 
 const CHECK_WORKER: usize = 0;
 const EXECUTE_WORKER: usize = 1;
@@ -93,15 +95,15 @@ where
                 std::iter::from_fn(|| self.check_queue.pop_front())
                     .take(MAX_TRANSACTIONS_PER_MESSAGE),
             );
-            self.bridge.schedule(
-                CHECK_WORKER,
-                &self.batch,
-                u64::MAX,
-                pack_message_flags::CHECK
+            self.bridge.schedule(ScheduleBatch {
+                worker: CHECK_WORKER,
+                transactions: &self.batch,
+                max_working_slot: u64::MAX,
+                flags: pack_message_flags::CHECK
                     | check_flags::STATUS_CHECKS
                     | check_flags::LOAD_FEE_PAYER_BALANCE
                     | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-            );
+            });
         }
 
         // If we are the leader, schedule executes.
@@ -113,12 +115,12 @@ where
                 std::iter::from_fn(|| self.execute_queue.pop_front())
                     .take(MAX_TRANSACTIONS_PER_MESSAGE),
             );
-            self.bridge.schedule(
-                EXECUTE_WORKER,
-                &self.batch,
-                self.bridge.progress().current_slot + 1,
-                pack_message_flags::EXECUTE,
-            );
+            self.bridge.schedule(ScheduleBatch {
+                worker: EXECUTE_WORKER,
+                transactions: &self.batch,
+                max_working_slot: self.bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE,
+            });
         }
     }
 }

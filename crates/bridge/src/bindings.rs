@@ -16,8 +16,8 @@ use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
 use crate::{
-    Bridge, RuntimeState, TransactionId, TransactionState, TxDecision, Worker, WorkerAction,
-    WorkerResponse,
+    Bridge, RuntimeState, ScheduleBatch, TransactionId, TransactionState, TxDecision, Worker,
+    WorkerAction, WorkerResponse,
 };
 
 pub struct SchedulerBindings<M> {
@@ -112,6 +112,7 @@ impl<M> SchedulerBindings<M> {
                         .inner_data()
                         .to_sharable_transaction_region(allocator),
                 );
+                // OLI: We are not wrting meta like we should.
                 meta_ptr.add(i).write(id);
             };
         }
@@ -334,10 +335,9 @@ impl<M> Bridge for SchedulerBindings<M> {
 
     fn schedule(
         &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
+        ScheduleBatch { worker, transactions: batch, max_working_slot, flags }: ScheduleBatch<
+            &[TransactionId],
+        >,
     ) {
         let queue = &mut self.workers[worker].0.pack_to_worker;
 
