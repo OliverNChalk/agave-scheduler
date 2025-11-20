@@ -1,8 +1,6 @@
 #[macro_use]
 extern crate static_assertions;
 
-mod transaction_map;
-
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
     CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
@@ -11,7 +9,6 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{
     IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, SharableTransactionRegion, pack_message_flags,
 };
-use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use bridge::{
@@ -29,17 +26,13 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::transaction_map::TransactionMap;
-
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
-const STATE_CAPACITY: usize = UNCHECKED_CAPACITY + CHECKED_CAPACITY;
 
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
 const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE;
 const_assert!(TX_BATCH_SIZE < 4096);
-const TX_BATCH_META_OFFSET: usize = TX_REGION_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
 
 const CHECK_WORKER: usize = 0;
 /// How many percentage points before the end should we aim to fill the block.
@@ -48,7 +41,6 @@ const BLOCK_FILL_CUTOFF: u8 = 20;
 pub struct GreedyScheduler {
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
-    state: TransactionMap,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<TransactionId>,
@@ -62,7 +54,6 @@ impl GreedyScheduler {
         Self {
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-            state: TransactionMap::with_capacity(STATE_CAPACITY),
             cu_in_flight: 0,
             schedule_locks: HashMap::default(),
             schedule_batch: Vec::default(),
@@ -115,16 +106,13 @@ impl GreedyScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         for worker in 0..5 {
-            while bridge.pop_worker(
-                worker,
-                |bridge, WorkerResponse { key, data, meta, response }| match response {
+            while bridge.pop_worker(worker, |bridge, WorkerResponse { meta, response, .. }| {
+                match response {
                     WorkerAction::Unprocessed => TxDecision::Keep,
-                    WorkerAction::Check(rep, keys) => {
-                        self.on_check(bridge, key, meta, data, rep, keys)
-                    }
-                    WorkerAction::Execute(rep) => self.on_execute(key, meta, data, rep),
-                },
-            ) {}
+                    WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
+                    WorkerAction::Execute(rep) => self.on_execute(meta, rep),
+                }
+            }) {}
         }
     }
 
@@ -282,15 +270,7 @@ impl GreedyScheduler {
         }
     }
 
-    fn on_check<B>(
-        &mut self,
-        bridge: &mut B,
-        id: TransactionId,
-        meta: PriorityId,
-        tx: &TransactionPtr,
-        rep: CheckResponse,
-        keys: Option<&PubkeysPtr>,
-    ) -> TxDecision
+    fn on_check<B>(&mut self, bridge: &mut B, meta: PriorityId, rep: CheckResponse) -> TxDecision
     where
         B: Bridge<Meta = PriorityId>,
     {
@@ -337,13 +317,7 @@ impl GreedyScheduler {
         TxDecision::Keep
     }
 
-    fn on_execute(
-        &mut self,
-        id: TransactionId,
-        meta: PriorityId,
-        tx: &TransactionPtr,
-        rep: ExecutionResponse,
-    ) -> TxDecision {
+    fn on_execute(&mut self, meta: PriorityId, rep: ExecutionResponse) -> TxDecision {
         // Remove in-flight costs.
         self.cu_in_flight -= meta.cost;
 
@@ -405,11 +379,11 @@ impl GreedyScheduler {
     }
     */
 
-    fn calculate_priority<'a>(
+    fn calculate_priority(
         runtime: &RuntimeState,
         tx: &SanitizedTransactionView<TransactionPtr>,
     ) -> Option<(u64, u32)> {
-        // TODO: Need to construct a runtime transaction around a reference.
+        // Construct runtime transaction.
         let tx = RuntimeTransaction::<&SanitizedTransactionView<TransactionPtr>>::try_new(
             tx,
             MessageHash::Compute,
