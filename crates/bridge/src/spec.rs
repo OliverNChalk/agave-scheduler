@@ -66,7 +66,6 @@ pub trait Worker {
 
 pub struct WorkerResponse<'a, M> {
     pub key: TransactionId,
-    pub data: &'a TransactionPtr,
     pub meta: M,
     pub response: WorkerAction<'a>,
 }
