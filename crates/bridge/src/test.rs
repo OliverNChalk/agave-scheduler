@@ -1,6 +1,13 @@
+use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::ptr::NonNull;
 
+use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::ProgressMessage;
+use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::transaction_view::SanitizedTransactionView;
+use slotmap::SlotMap;
+use solana_fee::FeeFeatures;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
@@ -8,12 +15,41 @@ use crate::{
     TxDecision, Worker, WorkerResponse,
 };
 
-#[derive(Debug)]
-pub struct TestBridge<M>(PhantomData<M>);
+pub struct TestBridge<M> {
+    progress_queue: VecDeque<ProgressMessage>,
+    tpu_queue: VecDeque<TransactionId>,
+    worker_queue: VecDeque<()>,
+    workers: Vec<TestWorker>,
+
+    progress: ProgressMessage,
+    runtime: RuntimeState,
+    state: SlotMap<TransactionId, TransactionState>,
+
+    _meta: PhantomData<M>,
+}
 
 impl<M> TestBridge<M> {
+    pub fn queue_progress(&mut self, progress: ProgressMessage) {
+        self.progress_queue.push_back(progress);
+    }
+
     pub fn queue_tpu(&mut self, tx: &VersionedTransaction) {
-        todo!()
+        // Serialize the transaction & get a raw pointer.
+        let mut serialized = bincode::serialize(tx).unwrap();
+        let len = serialized.len();
+        let data = NonNull::new(serialized.as_mut_ptr()).unwrap();
+        core::mem::forget(serialized);
+
+        // Construct our TransactionPtr & sanitized view.
+        //
+        // SAFETY
+        // - We own this allocation exclusively & len is accurate.
+        let data = unsafe { TransactionPtr::from_raw_parts(data, len) };
+        let data = SanitizedTransactionView::try_new_sanitized(data, true).unwrap();
+
+        // Insert into state & store the key in the tpu queue.
+        let key = self.state.insert(TransactionState { data, keys: None });
+        self.tpu_queue.push_back(key);
     }
 
     pub fn queue_response(
@@ -31,7 +67,30 @@ impl<M> TestBridge<M> {
 
 impl<M> Default for TestBridge<M> {
     fn default() -> Self {
-        Self(PhantomData)
+        Self {
+            progress_queue: VecDeque::default(),
+            tpu_queue: VecDeque::default(),
+            worker_queue: VecDeque::default(),
+            workers: vec![TestWorker { len: 0, cap: 4 }],
+
+            progress: ProgressMessage {
+                leader_state: 0,
+                current_slot: 0,
+                next_leader_slot: u64::MAX,
+                leader_range_end: u64::MAX,
+                remaining_cost_units: 0,
+                current_slot_progress: 0,
+            },
+            runtime: RuntimeState {
+                feature_set: FeatureSet::all_enabled(),
+                fee_features: FeeFeatures { enable_secp256r1_precompile: true },
+                lamports_per_signature: 5000,
+                burn_percent: 50,
+            },
+            state: SlotMap::default(),
+
+            _meta: PhantomData,
+        }
     }
 }
 
@@ -40,11 +99,11 @@ impl<M> Bridge for TestBridge<M> {
     type Meta = M;
 
     fn runtime(&self) -> &RuntimeState {
-        todo!()
+        &self.runtime
     }
 
     fn progress(&self) -> &ProgressMessage {
-        todo!()
+        &self.progress
     }
 
     fn worker_count(&self) -> usize {
@@ -52,31 +111,41 @@ impl<M> Bridge for TestBridge<M> {
     }
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker {
-        todo!()
+        &mut self.workers[id]
     }
 
     fn tx(&self, key: TransactionId) -> &TransactionState {
-        todo!()
+        &self.state[key]
     }
 
     fn tx_drop(&mut self, key: TransactionId) {
-        todo!()
+        self.state.remove(key).unwrap();
     }
 
     fn drain_progress(&mut self) {
-        todo!()
+        if let Some(progress) = self.progress_queue.back() {
+            self.progress = *progress;
+        }
+
+        self.progress_queue.clear();
     }
 
     fn tpu_len(&mut self) -> usize {
-        todo!()
+        self.tpu_queue.len()
     }
 
     fn tpu_drain(
         &mut self,
-        cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
         max_count: usize,
     ) {
-        todo!()
+        for _ in 0..max_count {
+            let Some(tx) = self.tpu_queue.pop_front() else {
+                return;
+            };
+
+            cb(self, tx);
+        }
     }
 
     fn pop_worker(
@@ -84,7 +153,10 @@ impl<M> Bridge for TestBridge<M> {
         worker: usize,
         cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool {
-        todo!()
+        match self.worker_queue.pop_front() {
+            Some(rep) => todo!(),
+            None => false,
+        }
     }
 
     fn schedule(&mut self, batch: ScheduleBatch<&[KeyedTransactionMeta<M>]>) {
@@ -92,14 +164,17 @@ impl<M> Bridge for TestBridge<M> {
     }
 }
 
-pub struct TestWorker;
+pub struct TestWorker {
+    len: usize,
+    cap: usize,
+}
 
 impl Worker for TestWorker {
     fn len(&mut self) -> usize {
-        todo!()
+        self.len
     }
 
     fn rem(&mut self) -> usize {
-        todo!()
+        self.cap - self.len
     }
 }
