@@ -222,7 +222,7 @@ impl GreedyScheduler {
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in 1..bridge.worker_len() {
             if budget_remaining == 0 || self.checked.is_empty() {
-                return;
+                break;
             }
 
             // If the worker already has a pending job, don't give it any more.
@@ -243,8 +243,7 @@ impl GreedyScheduler {
 
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
-                        let (tx, keys) = &bridge.tx(id.key);
-                        self.state
+                        let tx = bridge.tx(id.key);
                         if tx
                             .write_locks()
                             .any(|key| self.schedule_locks.insert(*key, true).is_some())
@@ -274,17 +273,17 @@ impl GreedyScheduler {
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {
-                return;
+                break;
             }
 
             // Update metrics.
             self.metrics
                 .execute_requested
-                .increment(u64::from(self.schedule_batch.len()));
+                .increment(self.schedule_batch.len() as u64);
 
             // Write the next batch for the worker.
             bridge.schedule(
-                worker_id,
+                worker,
                 &self.schedule_batch,
                 bridge.progress().current_slot + 1,
                 pack_message_flags::EXECUTE,
@@ -420,7 +419,7 @@ impl GreedyScheduler {
         tx: &SanitizedTransactionView<TransactionPtr>,
     ) -> Option<(u64, u32)> {
         // TODO: Need to construct a runtime transaction around a reference.
-        let tx = RuntimeTransaction::<SanitizedTransactionView<TransactionPtr>>::try_new(
+        let tx = RuntimeTransaction::<&SanitizedTransactionView<TransactionPtr>>::try_new(
             tx,
             MessageHash::Compute,
             None,
