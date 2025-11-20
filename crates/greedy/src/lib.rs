@@ -459,6 +459,7 @@ mod tests {
     };
     use agave_scheduling_utils::handshake::server::AgaveSession;
     use agave_scheduling_utils::handshake::{self, ClientLogon};
+    use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
     use agave_scheduling_utils::responses_region::allocate_check_response_region;
     use agave_scheduling_utils::transaction_ptr::TransactionPtrBatch;
     use agave_transaction_view::transaction_view::TransactionView;
@@ -655,11 +656,11 @@ mod tests {
         assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
-    /*
     #[test]
     fn schedule_by_priority_alt_non_conflicting() {
-        let mut harness = Harness::setup();
-        let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
+        let resolved_pubkeys = TestBridge::to_shared_pubkeys(vec![1; 32]);
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
@@ -667,8 +668,21 @@ mod tests {
         let tx0 = noop_with_alt_locks(&payer0, &[], &[read_lock], 25_000, 100);
         bridge.queue_tpu(&tx0);
         scheduler.poll(&mut bridge);
-        let (worker, msg) = harness.drain_pack_to_workers()[0];
-        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
+        let batch = bridge.pop_schedule().unwrap();
+        bridge.queue_response(
+            &batch,
+            WorkerResponse {
+                key: batch.transactions[0].key,
+                meta: batch.transactions[0].meta,
+                response: WorkerAction::Check(
+                    bridge.check_ok(SharablePubkeys {
+                        offset: 0,
+                        num_pubkeys: resolved_pubkeys.as_slice().len(),
+                    }),
+                    Some(resolved_pubkeys),
+                ),
+            },
+        );
         scheduler.poll(&mut bridge);
         assert_eq!(bridge.pop_schedule(), None);
 
@@ -677,8 +691,21 @@ mod tests {
         let tx1 = noop_with_alt_locks(&payer1, &[], &[read_lock], 25_000, 500);
         bridge.queue_tpu(&tx1);
         scheduler.poll(&mut bridge);
-        let (worker, msg) = harness.drain_pack_to_workers()[0];
-        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
+        let batch = bridge.pop_schedule().unwrap();
+        bridge.queue_response(
+            &batch,
+            WorkerResponse {
+                key: batch.transactions[0].key,
+                meta: batch.transactions[0].meta,
+                response: WorkerAction::Check(
+                    bridge.check_ok(SharablePubkeys {
+                        offset: 0,
+                        num_pubkeys: resolved_pubkeys.as_slice().len(),
+                    }),
+                    Some(resolved_pubkeys),
+                ),
+            },
+        );
         scheduler.poll(&mut bridge);
         assert_eq!(bridge.pop_schedule(), None);
 
@@ -693,17 +720,16 @@ mod tests {
 
         // Assert - Scheduler has scheduled both.
         scheduler.poll(&mut bridge);
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex0, ex1] = batch.transactions[..] else {
             panic!();
         };
-        let [ex0, ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
+    /*
     #[test]
     fn schedule_by_priority_alt_conflicting() {
         let mut harness = Harness::setup();

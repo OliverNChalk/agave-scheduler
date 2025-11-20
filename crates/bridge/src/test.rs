@@ -7,11 +7,13 @@ use agave_scheduler_bindings::worker_message_types::{
     CheckResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_data::TransactionData;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
+use solana_pubkey::Pubkey;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
@@ -137,6 +139,19 @@ where
             min_alt_deactivation_slot: u64::MAX,
             resolved_pubkeys,
         }
+    }
+
+    pub fn to_shared_pubkeys(pubkeys: Vec<Pubkey>) -> PubkeysPtr {
+        // Get the raw pointer components.
+        let len = pubkeys.len();
+        let data = NonNull::new(pubkeys.as_mut_ptr()).unwrap();
+        core::mem::forget(pubkeys);
+
+        // Construct our PubkeysPtr.
+        //
+        // SAFETY
+        // - We own this allocation exclusively & len is accurate.
+        unsafe { PubkeysPtr::from_raw_parts(data, len) }
     }
 }
 
