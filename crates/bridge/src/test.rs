@@ -34,6 +34,7 @@ impl<M> TestBridge<M>
 where
     M: Copy,
 {
+    #[must_use]
     pub fn new(worker_count: usize, worker_req_cap: usize) -> Self {
         Self {
             progress_queue: VecDeque::default(),
@@ -114,7 +115,7 @@ where
     }
 
     fn worker_count(&self) -> usize {
-        todo!()
+        self.workers.len()
     }
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker {
