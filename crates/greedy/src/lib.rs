@@ -449,20 +449,7 @@ impl Ord for PriorityId {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::IntoRawFd;
-    use std::ptr::NonNull;
-
-    use agave_scheduler_bindings::worker_message_types::CheckResponse;
-    use agave_scheduler_bindings::{
-        IS_NOT_LEADER, PackToWorkerMessage, ProgressMessage, SharablePubkeys,
-        SharableTransactionRegion, TpuToPackMessage, WorkerToPackMessage, processed_codes,
-    };
-    use agave_scheduling_utils::handshake::server::AgaveSession;
-    use agave_scheduling_utils::handshake::{self, ClientLogon};
-    use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
-    use agave_scheduling_utils::responses_region::allocate_check_response_region;
-    use agave_scheduling_utils::transaction_ptr::TransactionPtrBatch;
-    use agave_transaction_view::transaction_view::TransactionView;
+    use agave_scheduler_bindings::{IS_NOT_LEADER, ProgressMessage};
     use bridge::TestBridge;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
