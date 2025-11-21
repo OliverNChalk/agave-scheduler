@@ -3,7 +3,7 @@ use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{
-    CheckResponse, ExecutionResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
+    CheckResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
@@ -90,12 +90,12 @@ where
         &mut self,
         batch: &ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
         index: usize,
-        keys: Option<PubkeysPtr>,
+        keys: Option<Vec<Pubkey>>,
     ) {
         let tx = batch.transactions[index];
 
         // Insert the keys (if any).
-        self.state[tx.key].keys = keys;
+        self.state[tx.key].keys = keys.map(Self::allocate_pubkeys_ptr);
 
         let rep = (tx, WorkerActionLite::Check(self.check_ok()));
         self.worker_queues[batch.worker].push_back(rep);
@@ -131,6 +131,19 @@ where
             min_alt_deactivation_slot: u64::MAX,
             resolved_pubkeys: SharablePubkeys { offset: 0, num_pubkeys: 0 },
         }
+    }
+
+    fn allocate_pubkeys_ptr(mut keys: Vec<Pubkey>) -> PubkeysPtr {
+        // Get the raw pointer components.
+        let len = keys.len();
+        let data = NonNull::new(keys.as_mut_ptr()).unwrap();
+        core::mem::forget(keys);
+
+        // Construct our PubkeysPtr.
+        //
+        // SAFETY
+        // - We own this allocation exclusively & len is accurate.
+        unsafe { PubkeysPtr::from_raw_parts(data, len) }
     }
 }
 
@@ -205,9 +218,7 @@ where
         // Temporarily take keys to avoid mutable aliasing self.
         let keys = self.state[key].keys.take();
         let response = match rep {
-            WorkerActionLite::Unprocessed => WorkerAction::Unprocessed,
             WorkerActionLite::Check(rep) => WorkerAction::Check(rep, keys.as_ref()),
-            WorkerActionLite::Execute(rep) => WorkerAction::Execute(rep),
         };
 
         match cb(self, WorkerResponse { key, meta, response }) {
@@ -281,27 +292,5 @@ impl Worker for TestWorker {
 
 #[derive(Debug, Clone)]
 enum WorkerActionLite {
-    Unprocessed,
     Check(CheckResponse),
-    Execute(ExecutionResponse),
-}
-
-pub mod utils {
-    use super::*;
-
-    // TODO: Remove.
-    pub fn leak_pubkeys(mut pubkeys: Vec<Pubkey>) -> &'static PubkeysPtr {
-        // Get the raw pointer components.
-        let len = pubkeys.len();
-        let data = NonNull::new(pubkeys.as_mut_ptr()).unwrap();
-        core::mem::forget(pubkeys);
-
-        // Construct our PubkeysPtr.
-        //
-        // SAFETY
-        // - We own this allocation exclusively & len is accurate.
-        let keys = unsafe { PubkeysPtr::from_raw_parts(data, len) };
-
-        Box::leak(Box::new(keys))
-    }
 }

@@ -191,7 +191,6 @@ impl GreedyScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        println!("schedule_execute");
         self.schedule_locks.clear();
 
         debug_assert_eq!(bridge.progress().leader_state, IS_LEADER);
@@ -205,7 +204,6 @@ impl GreedyScheduler {
             + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in 1..bridge.worker_count() {
-            println!("worker={worker}");
             if budget_remaining == 0 || self.checked.is_empty() {
                 break;
             }
@@ -231,16 +229,12 @@ impl GreedyScheduler {
                         let tx = bridge.tx(id.key);
                         if tx
                             .write_locks()
-                            .inspect(|lock| println!("write: {lock}"))
                             .any(|key| self.schedule_locks.insert(*key, true).is_some())
-                            || tx
-                                .read_locks()
-                                .inspect(|lock| println!("read: {lock}"))
-                                .any(|key| {
-                                    self.schedule_locks
-                                        .insert(*key, false)
-                                        .is_some_and(|writable| writable)
-                                })
+                            || tx.read_locks().any(|key| {
+                                self.schedule_locks
+                                    .insert(*key, false)
+                                    .is_some_and(|writable| writable)
+                            })
                         {
                             self.checked.push(*id);
                             budget_remaining = 0;
@@ -251,8 +245,6 @@ impl GreedyScheduler {
                         // Update the budget as we are scheduling this TX.
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
                         self.cu_in_flight += id.cost;
-
-                        println!("SCHEDULE:\n {tx:?}");
 
                         true
                     })
@@ -512,12 +504,7 @@ mod tests {
         assert_eq!(batch.transactions.len(), 1);
 
         // Respond with OK.
-        let rep = WorkerResponse {
-            key: batch.transactions[0].key,
-            meta: batch.transactions[0].meta,
-            response: WorkerAction::Check(bridge.check_ok(), None),
-        };
-        bridge.queue_response(&batch, rep);
+        bridge.queue_check_response(&batch, 0, None);
         scheduler.poll(&mut bridge);
 
         // Assert - Scheduler does not schedule the valid TX as we are not leader.
@@ -549,12 +536,7 @@ mod tests {
         assert_eq!(batch.transactions.len(), 1);
 
         // Respond with OK.
-        let rep = WorkerResponse {
-            key: batch.transactions[0].key,
-            meta: batch.transactions[0].meta,
-            response: WorkerAction::Check(bridge.check_ok(), None),
-        };
-        bridge.queue_response(&batch, rep);
+        bridge.queue_check_response(&batch, 0, None);
         scheduler.poll(&mut bridge);
 
         // Assert - A single request (to execute the TX) is sent.
@@ -662,8 +644,7 @@ mod tests {
     fn schedule_by_priority_alt_non_conflicting() {
         let mut bridge = TestBridge::new(5, 4);
         let mut scheduler = GreedyScheduler::new();
-        let resolved_pubkeys =
-            bridge::test::utils::leak_pubkeys(vec![Pubkey::new_from_array([1; 32])]);
+        let resolved_pubkeys = vec![Pubkey::new_from_array([1; 32])];
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
@@ -672,14 +653,7 @@ mod tests {
         bridge.queue_tpu(&tx0);
         scheduler.poll(&mut bridge);
         let batch = bridge.pop_schedule().unwrap();
-        bridge.queue_response(
-            &batch,
-            WorkerResponse {
-                key: batch.transactions[0].key,
-                meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
-            },
-        );
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys.clone()));
         scheduler.poll(&mut bridge);
         assert_eq!(bridge.pop_schedule(), None);
 
@@ -689,14 +663,7 @@ mod tests {
         bridge.queue_tpu(&tx1);
         scheduler.poll(&mut bridge);
         let batch = bridge.pop_schedule().unwrap();
-        bridge.queue_response(
-            &batch,
-            WorkerResponse {
-                key: batch.transactions[0].key,
-                meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
-            },
-        );
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys));
         scheduler.poll(&mut bridge);
         assert_eq!(bridge.pop_schedule(), None);
 
@@ -728,19 +695,12 @@ mod tests {
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
         let write_lock = Pubkey::new_unique();
-        let resolved_pubkeys = bridge::test::utils::leak_pubkeys(vec![write_lock]);
+        let resolved_pubkeys = vec![write_lock];
         let tx0 = noop_with_alt_locks(&payer0, &[write_lock], &[], 25_000, 100);
         bridge.queue_tpu(&tx0);
         scheduler.poll(&mut bridge);
         let batch = bridge.pop_schedule().unwrap();
-        bridge.queue_response(
-            &batch,
-            WorkerResponse {
-                key: batch.transactions[0].key,
-                meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
-            },
-        );
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys.clone()));
         scheduler.poll(&mut bridge);
         assert_eq!(bridge.pop_schedule(), None);
 
@@ -750,14 +710,7 @@ mod tests {
         bridge.queue_tpu(&tx1);
         scheduler.poll(&mut bridge);
         let batch = bridge.pop_schedule().unwrap();
-        bridge.queue_response(
-            &batch,
-            WorkerResponse {
-                key: batch.transactions[0].key,
-                meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
-            },
-        );
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys));
         scheduler.poll(&mut bridge);
         assert_eq!(bridge.pop_schedule(), None);
 
