@@ -12,7 +12,8 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use bridge::{
-    Bridge, RuntimeState, TransactionId, TxDecision, Worker, WorkerAction, WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker,
+    WorkerAction, WorkerResponse,
 };
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
@@ -43,7 +44,7 @@ pub struct GreedyScheduler {
     checked: MinMaxHeap<PriorityId>,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
-    schedule_batch: Vec<TransactionId>,
+    schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
 
     metrics: GreedyMetrics,
 }
@@ -164,23 +165,26 @@ impl GreedyScheduler {
             }
 
             self.schedule_batch.clear();
-            self.schedule_batch
-                .extend(std::iter::from_fn(|| self.unchecked.pop_max().map(|id| id.key)));
-            bridge.schedule(
-                CHECK_WORKER,
-                &self.schedule_batch,
-                u64::MAX,
-                pack_message_flags::CHECK
+            self.schedule_batch.extend(std::iter::from_fn(|| {
+                self.unchecked
+                    .pop_max()
+                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
+            }));
+            bridge.schedule(ScheduleBatch {
+                worker: CHECK_WORKER,
+                transactions: &self.schedule_batch,
+                max_working_slot: u64::MAX,
+                flags: pack_message_flags::CHECK
                     | check_flags::STATUS_CHECKS
                     | check_flags::LOAD_FEE_PAYER_BALANCE
                     | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-            );
+            });
         }
 
         // Update metrics with our scheduled amount.
         self.metrics
             .check_requested
-            .increment((self.unchecked.len() - start_len) as u64);
+            .increment((start_len - self.unchecked.len()) as u64);
     }
 
     fn schedule_execute<B>(&mut self, bridge: &mut B)
@@ -199,7 +203,7 @@ impl GreedyScheduler {
             .saturating_sub(bridge.progress().remaining_cost_units)
             + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
-        for worker in 1..bridge.worker_len() {
+        for worker in 1..bridge.worker_count() {
             if budget_remaining == 0 || self.checked.is_empty() {
                 break;
             }
@@ -244,7 +248,7 @@ impl GreedyScheduler {
 
                         true
                     })
-                    .map(|id| id.key)
+                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
             };
 
             self.schedule_batch.clear();
@@ -261,12 +265,12 @@ impl GreedyScheduler {
                 .increment(self.schedule_batch.len() as u64);
 
             // Write the next batch for the worker.
-            bridge.schedule(
+            bridge.schedule(ScheduleBatch {
                 worker,
-                &self.schedule_batch,
-                bridge.progress().current_slot + 1,
-                pack_message_flags::EXECUTE,
-            );
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE,
+            });
         }
     }
 
@@ -443,20 +447,10 @@ impl Ord for PriorityId {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
-    use std::os::fd::IntoRawFd;
-    use std::ptr::NonNull;
-
-    use agave_scheduler_bindings::worker_message_types::CheckResponse;
-    use agave_scheduler_bindings::{
-        IS_NOT_LEADER, SharablePubkeys, SharableTransactionRegion, WorkerToPackMessage,
-        processed_codes,
-    };
-    use agave_scheduling_utils::handshake::server::AgaveSession;
-    use agave_scheduling_utils::handshake::{self, ClientLogon};
-    use agave_scheduling_utils::responses_region::allocate_check_response_region;
+    use agave_scheduler_bindings::{IS_NOT_LEADER, ProgressMessage};
+    use bridge::TestBridge;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Pubkey, Signer};
@@ -477,96 +471,94 @@ mod tests {
 
     #[test]
     fn check_no_schedule() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.send_tx(
+        bridge.queue_tpu(
             &solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()).into(),
         );
 
         // Poll the greedy scheduler.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
 
         // Assert - A single request (to check the TX) is sent.
-        let mut worker_requests = harness.drain_pack_to_workers();
-        assert_eq!(worker_requests.len(), 1);
-        let (worker_index, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, pack_message_flags::CHECK);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
 
         // Respond with OK.
-        harness.send_check_ok(worker_index, message, None);
-        harness.poll_scheduler();
+        bridge.queue_check_response(&batch, 0, None);
+        scheduler.poll(&mut bridge);
 
         // Assert - Scheduler does not schedule the valid TX as we are not leader.
-        assert!(harness.session.workers.iter_mut().all(|worker| {
-            worker.pack_to_worker.sync();
-
-            worker.pack_to_worker.is_empty()
-        }));
+        assert_eq!(bridge.pop_schedule(), None);
     }
 
     #[test]
     fn check_then_schedule() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Notify the scheduler that node is now leader.
-        harness.send_progress(ProgressMessage { leader_state: IS_LEADER, ..MOCK_PROGRESS });
+        bridge.queue_progress(ProgressMessage { leader_state: IS_LEADER, ..MOCK_PROGRESS });
 
         // Ingest a simple transfer.
         let from = Keypair::new();
         let to = Pubkey::new_unique();
-        harness.send_tx(
+        bridge.queue_tpu(
             &solana_system_transaction::transfer(&from, &to, 1, Hash::new_unique()).into(),
         );
 
         // Poll the greedy scheduler.
-        harness.poll_scheduler();
+        scheduler.poll(&mut bridge);
 
         // Assert - A single request (to check the TX) is sent.
-        let mut worker_requests = harness.drain_pack_to_workers();
-        assert_eq!(worker_requests.len(), 1);
-        let (worker_index, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, pack_message_flags::CHECK);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
 
         // Respond with OK.
-        harness.send_check_ok(worker_index, message, None);
-        harness.poll_scheduler();
+        bridge.queue_check_response(&batch, 0, None);
+        scheduler.poll(&mut bridge);
 
         // Assert - A single request (to execute the TX) is sent.
-        let mut worker_requests = harness.drain_pack_to_workers();
-        assert_eq!(worker_requests.len(), 1);
-        let (_, message) = worker_requests.remove(0);
-        assert_eq!(message.flags & 1, pack_message_flags::EXECUTE);
-        assert_eq!(message.batch.num_transactions, 1);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(batch.flags & 1, pack_message_flags::EXECUTE);
+        assert_eq!(batch.transactions.len(), 1);
     }
 
     #[test]
     fn schedule_by_priority_static_non_conflicting() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
         let tx0 = noop_with_budget(&payer0, 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
         let tx1 = noop_with_budget(&payer1, 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -574,42 +566,42 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled both.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch0 = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+
+        let [ex0, ex1] = batch0.transactions[..] else {
             panic!();
         };
-        let [ex0, ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
     #[test]
     fn schedule_by_priority_static_conflicting() {
-        let mut harness = Harness::setup();
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer (with low priority).
         let payer = Keypair::new();
         let tx0 = noop_with_budget(&payer, 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let tx1 = noop_with_budget(&payer, 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
-        harness.process_checks();
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -617,57 +609,54 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled tx1.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex0] = &batch.transactions[..] else {
             panic!();
         };
-        let [ex0] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
 
         // Assert - Scheduler has scheduled tx0.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex1] = &batch.transactions[..] else {
             panic!();
         };
-        let [ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
     #[test]
     fn schedule_by_priority_alt_non_conflicting() {
-        let mut harness = Harness::setup();
-        let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
+        let resolved_pubkeys = vec![Pubkey::new_from_array([1; 32])];
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
         let read_lock = Pubkey::new_unique();
         let tx0 = noop_with_alt_locks(&payer0, &[], &[read_lock], 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
-        let (worker, msg) = harness.drain_pack_to_workers()[0];
-        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys.clone()));
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
         let tx1 = noop_with_alt_locks(&payer1, &[], &[read_lock], 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
-        let (worker, msg) = harness.drain_pack_to_workers()[0];
-        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys));
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -675,47 +664,46 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled both.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex0, ex1] = batch.transactions[..] else {
             panic!();
         };
-        let [ex0, ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
     #[test]
     fn schedule_by_priority_alt_conflicting() {
-        let mut harness = Harness::setup();
-        let resolved_pubkeys = Some(vec![Pubkey::new_from_array([1; 32])]);
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new();
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
         let write_lock = Pubkey::new_unique();
+        let resolved_pubkeys = vec![write_lock];
         let tx0 = noop_with_alt_locks(&payer0, &[write_lock], &[], 25_000, 100);
-        harness.send_tx(&tx0);
-        harness.poll_scheduler();
-        let (worker, msg) = harness.drain_pack_to_workers()[0];
-        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx0);
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys.clone()));
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Ingest a simple transfer (with high priority).
         let payer1 = Keypair::new();
         let tx1 = noop_with_alt_locks(&payer1, &[write_lock], &[], 25_000, 500);
-        harness.send_tx(&tx1);
-        harness.poll_scheduler();
-        let (worker, msg) = harness.drain_pack_to_workers()[0];
-        harness.send_check_ok(worker, msg, resolved_pubkeys.clone());
-        harness.poll_scheduler();
-        assert!(harness.drain_pack_to_workers().is_empty());
+        bridge.queue_tpu(&tx1);
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        bridge.queue_check_response(&batch, 0, Some(resolved_pubkeys));
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
 
         // Become the leader of a slot that is 50% done with a lot of remaining cost
         // units.
-        harness.send_progress(ProgressMessage {
+        bridge.queue_progress(ProgressMessage {
             leader_state: IS_LEADER,
             current_slot_progress: 50,
             remaining_cost_units: 50_000_000,
@@ -723,202 +711,22 @@ mod tests {
         });
 
         // Assert - Scheduler has scheduled tx1.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex0] = batch.transactions[..] else {
             panic!();
         };
-        let [ex0] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex0.signatures()[0], tx1.signatures[0]);
+        assert_eq!(bridge.tx(ex0.key).data.signatures()[0], tx1.signatures[0]);
 
         // Assert - Scheduler has scheduled tx0.
-        harness.poll_scheduler();
-        let batches = harness.drain_batches();
-        let [(_, batch)] = &batches[..] else {
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(bridge.pop_schedule(), None);
+        let [ex1] = batch.transactions[..] else {
             panic!();
         };
-        let [ex1] = &batch[..] else {
-            panic!();
-        };
-        assert_eq!(ex1.signatures()[0], tx0.signatures[0]);
-    }
-
-    struct Harness {
-        slot: u64,
-        session: AgaveSession,
-        scheduler: GreedyScheduler,
-        queues: GreedyQueues,
-    }
-
-    impl Harness {
-        fn setup() -> Self {
-            let logon = ClientLogon {
-                worker_count: 4,
-                allocator_size: 16 * 1024 * 1024,
-                allocator_handles: 1,
-                tpu_to_pack_capacity: 16,
-                progress_tracker_capacity: 16,
-                pack_to_worker_capacity: 16,
-                worker_to_pack_capacity: 16,
-                flags: 0,
-            };
-            let (agave_session, files) = handshake::server::Server::setup_session(logon).unwrap();
-            let client_session = handshake::client::setup_session(
-                &logon,
-                files.into_iter().map(IntoRawFd::into_raw_fd).collect(),
-            )
-            .unwrap();
-            let (scheduler, queues) = GreedyScheduler::new(client_session);
-
-            Self { slot: 0, session: agave_session, scheduler, queues }
-        }
-
-        fn allocator(&self) -> &Allocator {
-            &self.session.tpu_to_pack.allocator
-        }
-
-        fn poll_scheduler(&mut self) {
-            self.scheduler.poll(&mut self.queues);
-        }
-
-        fn process_checks(&mut self) {
-            for (worker_index, message) in self.drain_pack_to_workers() {
-                assert_eq!(message.flags & 1, pack_message_flags::CHECK);
-                self.send_check_ok(worker_index, message, None);
-            }
-        }
-
-        fn drain_pack_to_workers(&mut self) -> Vec<(usize, PackToWorkerMessage)> {
-            self.session
-                .workers
-                .iter_mut()
-                .enumerate()
-                .flat_map(|(i, worker)| {
-                    worker.pack_to_worker.sync();
-
-                    std::iter::from_fn(move || {
-                        // TODO: Missing finalize call.
-                        worker.pack_to_worker.try_read().map(|msg| (i, *msg))
-                    })
-                })
-                .collect()
-        }
-
-        fn drain_batches(&mut self) -> Vec<(usize, Vec<TransactionView<true, TransactionPtr>>)> {
-            self.drain_pack_to_workers()
-                .into_iter()
-                .map(|(index, msg)| {
-                    let batch = unsafe {
-                        TransactionPtrBatch::<PriorityId>::from_sharable_transaction_batch_region(
-                            &msg.batch,
-                            self.allocator(),
-                        )
-                    };
-
-                    (
-                        index,
-                        batch
-                            .iter()
-                            .map(|(tx, _)| TransactionView::try_new_sanitized(tx, true).unwrap())
-                            .collect(),
-                    )
-                })
-                .collect()
-        }
-
-        fn send_progress(&mut self, progress: ProgressMessage) {
-            self.slot = progress.current_slot;
-
-            self.session.progress_tracker.sync();
-            self.session.progress_tracker.try_write(progress).unwrap();
-            self.session.progress_tracker.commit();
-        }
-
-        fn send_tx(&mut self, tx: &VersionedTransaction) {
-            // Serialize & copy the pointer to shared memory.
-            let mut packet = bincode::serialize(&tx).unwrap();
-            let packet_len = packet.len().try_into().unwrap();
-            let pointer = self.allocator().allocate(packet_len).unwrap();
-            unsafe {
-                pointer.copy_from_nonoverlapping(
-                    NonNull::new(packet.as_mut_ptr()).unwrap(),
-                    packet.len(),
-                );
-            }
-            let offset = unsafe { self.allocator().offset(pointer) };
-            let tx = SharableTransactionRegion { offset, length: packet_len };
-
-            self.session.tpu_to_pack.producer.sync();
-            self.session
-                .tpu_to_pack
-                .producer
-                .try_write(TpuToPackMessage { transaction: tx, flags: 0, src_addr: [0; 16] })
-                .unwrap();
-            self.session.tpu_to_pack.producer.commit();
-        }
-
-        fn send_check_ok(
-            &mut self,
-            worker_index: usize,
-            msg: PackToWorkerMessage,
-            pubkeys: Option<Vec<Pubkey>>,
-        ) {
-            assert_eq!(msg.batch.num_transactions, 1);
-
-            let resolved_pubkeys =
-                pubkeys.map_or(SharablePubkeys { offset: 0, num_pubkeys: 0 }, |keys| {
-                    assert!(!keys.is_empty());
-                    let pubkeys = self
-                        .allocator()
-                        .allocate(
-                            u32::try_from(std::mem::size_of::<Pubkey>() * keys.len()).unwrap(),
-                        )
-                        .unwrap();
-                    let offset = unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            keys.as_ptr(),
-                            pubkeys.as_ptr().cast(),
-                            keys.len(),
-                        );
-
-                        self.allocator().offset(pubkeys)
-                    };
-
-                    SharablePubkeys { offset, num_pubkeys: u32::try_from(keys.len()).unwrap() }
-                });
-
-            let (mut response_ptr, responses) =
-                allocate_check_response_region(self.allocator(), 1).unwrap();
-            unsafe {
-                *response_ptr.as_mut() = CheckResponse {
-                    parsing_and_sanitization_flags: 0,
-                    status_check_flags: status_check_flags::REQUESTED
-                        | status_check_flags::PERFORMED,
-                    fee_payer_balance_flags: fee_payer_balance_flags::REQUESTED
-                        | fee_payer_balance_flags::PERFORMED,
-                    resolve_flags: resolve_flags::REQUESTED | resolve_flags::PERFORMED,
-                    included_slot: self.slot,
-                    balance_slot: self.slot,
-                    fee_payer_balance: u64::from(u32::MAX),
-                    resolution_slot: self.slot,
-                    min_alt_deactivation_slot: u64::MAX,
-                    resolved_pubkeys,
-                };
-            }
-
-            let queue = &mut self.session.workers[worker_index].worker_to_pack;
-            queue.sync();
-            queue
-                .try_write(WorkerToPackMessage {
-                    batch: msg.batch,
-                    processed_code: processed_codes::PROCESSED,
-                    responses,
-                })
-                .unwrap();
-            queue.commit();
-        }
+        assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
     }
 
     fn noop_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> VersionedTransaction {
@@ -976,4 +784,3 @@ mod tests {
         .unwrap()
     }
 }
-*/

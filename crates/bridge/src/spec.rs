@@ -15,7 +15,7 @@ pub trait Bridge {
 
     fn progress(&self) -> &ProgressMessage;
 
-    fn worker_len(&self) -> usize;
+    fn worker_count(&self) -> usize;
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
@@ -39,13 +39,7 @@ pub trait Bridge {
         cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool;
 
-    fn schedule(
-        &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
-    );
+    fn schedule(&mut self, batch: ScheduleBatch<&[KeyedTransactionMeta<Self::Meta>]>);
 }
 
 pub struct RuntimeState {
@@ -55,31 +49,49 @@ pub struct RuntimeState {
     pub burn_percent: u64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ScheduleBatch<T> {
+    pub worker: usize,
+    pub transactions: T,
+    pub max_working_slot: u64,
+    pub flags: u16,
+}
+
 pub trait Worker {
     fn is_empty(&mut self) -> bool {
         self.len() == 0
     }
 
     fn len(&mut self) -> usize;
+
     fn rem(&mut self) -> usize;
 }
 
+#[derive(Debug, Clone)]
 pub struct WorkerResponse<'a, M> {
     pub key: TransactionId,
     pub meta: M,
     pub response: WorkerAction<'a>,
 }
 
+#[derive(Debug, Clone)]
 pub enum WorkerAction<'a> {
     Unprocessed,
     Check(CheckResponse, Option<&'a PubkeysPtr>),
     Execute(ExecutionResponse),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyedTransactionMeta<M> {
+    pub key: TransactionId,
+    pub meta: M,
+}
+
 slotmap::new_key_type! {
     pub struct TransactionId;
 }
 
+#[derive(Debug)]
 pub struct TransactionState {
     pub data: SanitizedTransactionView<TransactionPtr>,
     pub keys: Option<PubkeysPtr>,

@@ -16,8 +16,8 @@ use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
 
 use crate::{
-    Bridge, RuntimeState, TransactionId, TransactionState, TxDecision, Worker, WorkerAction,
-    WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
+    TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 
 pub struct SchedulerBindings<M> {
@@ -32,7 +32,10 @@ pub struct SchedulerBindings<M> {
     worker_response: Option<WorkerResponsePointers<M>>,
 }
 
-impl<M> SchedulerBindings<M> {
+impl<M> SchedulerBindings<M>
+where
+    M: Copy,
+{
     // TODO: Duplicated from scheduling_utils::transaction_ptr.
     const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
     const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
@@ -76,7 +79,7 @@ impl<M> SchedulerBindings<M> {
     fn collect_batch(
         allocator: &Allocator,
         state: &SlotMap<TransactionId, TransactionState>,
-        batch: &[TransactionId],
+        batch: &[KeyedTransactionMeta<M>],
     ) -> SharableTransactionBatchRegion {
         assert!(batch.len() <= MAX_TRANSACTIONS_PER_MESSAGE);
 
@@ -95,12 +98,12 @@ impl<M> SchedulerBindings<M> {
             allocator
                 .ptr_from_offset(transactions_offset)
                 .byte_add(Self::TX_BATCH_META_OFFSET)
-                .cast::<TransactionId>()
+                .cast::<KeyedTransactionMeta<M>>()
         };
 
         // Fill in the batch with transaction pointers.
-        for (i, id) in batch.iter().copied().enumerate() {
-            let tx = &state[id];
+        for (i, meta) in batch.iter().copied().enumerate() {
+            let tx = &state[meta.key];
 
             // SAFETY
             // - We have allocated the transaction batch to support at least
@@ -112,7 +115,7 @@ impl<M> SchedulerBindings<M> {
                         .inner_data()
                         .to_sharable_transaction_region(allocator),
                 );
-                meta_ptr.add(i).write(id);
+                meta_ptr.add(i).write(meta);
             };
         }
 
@@ -123,7 +126,10 @@ impl<M> SchedulerBindings<M> {
     }
 }
 
-impl<M> Bridge for SchedulerBindings<M> {
+impl<M> Bridge for SchedulerBindings<M>
+where
+    M: Copy,
+{
     type Worker = SchedulerWorker;
     type Meta = M;
 
@@ -135,7 +141,7 @@ impl<M> Bridge for SchedulerBindings<M> {
         &self.progress
     }
 
-    fn worker_len(&self) -> usize {
+    fn worker_count(&self) -> usize {
         self.workers.len()
     }
 
@@ -300,19 +306,14 @@ impl<M> Bridge for SchedulerBindings<M> {
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
 
-                let rep =
-                    WorkerResponse { key, meta, response: WorkerAction::Check(rep, keys.as_ref()) };
+                // Callback holding keys ref, defer storing keys on state.
+                let decision = cb(
+                    self,
+                    WorkerResponse { key, meta, response: WorkerAction::Check(rep, keys.as_ref()) },
+                );
 
-                let decision = cb(self, rep);
-                if decision == TxDecision::Drop
-                    && let Some(keys) = keys
-                {
-                    // SAFETY
-                    // - We own these pointers/allocations exclusively.
-                    unsafe {
-                        keys.free(&self.allocator);
-                    }
-                }
+                // Store the keys on state.
+                self.state[key].keys = keys;
 
                 decision
             }
@@ -321,6 +322,14 @@ impl<M> Bridge for SchedulerBindings<M> {
         // Remove the tx from state & drop the allocation if requested.
         if decision == TxDecision::Drop {
             let state = self.state.remove(key).unwrap();
+
+            if let Some(keys) = state.keys {
+                // SAFETY
+                // - We own these pointers/allocations exclusively.
+                unsafe {
+                    keys.free(&self.allocator);
+                }
+            }
 
             // SAFETY
             // - We own `tx` exclusively.
@@ -334,10 +343,9 @@ impl<M> Bridge for SchedulerBindings<M> {
 
     fn schedule(
         &mut self,
-        worker: usize,
-        batch: &[TransactionId],
-        max_working_slot: u64,
-        flags: u16,
+        ScheduleBatch { worker, transactions: batch, max_working_slot, flags }: ScheduleBatch<
+            &[KeyedTransactionMeta<M>],
+        >,
     ) {
         let queue = &mut self.workers[worker].0.pack_to_worker;
 
@@ -351,11 +359,6 @@ impl<M> Bridge for SchedulerBindings<M> {
             .unwrap();
         queue.commit();
     }
-}
-
-struct KeyedTransactionMeta<M> {
-    key: TransactionId,
-    meta: M,
 }
 
 pub struct SchedulerWorker(ClientWorkerSession);
