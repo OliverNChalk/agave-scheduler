@@ -21,7 +21,7 @@ impl SchedulerThread {
                 let session = handshake_client::connect(
                     &bindings_ipc,
                     ClientLogon {
-                        worker_count: 4,
+                        worker_count: 5,
                         allocator_size: 256 * 1024 * 1024,
                         allocator_handles: 1,
                         tpu_to_pack_capacity: 2usize.pow(16),
