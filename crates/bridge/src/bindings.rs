@@ -306,21 +306,14 @@ where
                     PubkeysPtr::from_sharable_pubkeys(&rep.resolved_pubkeys, &self.allocator)
                 });
 
-                let rep =
-                    WorkerResponse { key, meta, response: WorkerAction::Check(rep, keys.as_ref()) };
+                // Callback holding keys ref, defer storing keys on state.
+                let decision = cb(
+                    self,
+                    WorkerResponse { key, meta, response: WorkerAction::Check(rep, keys.as_ref()) },
+                );
 
-                let decision = cb(self, rep);
-                if decision == TxDecision::Drop
-                    && let Some(keys) = keys
-                {
-                    // SAFETY
-                    // - We own these pointers/allocations exclusively.
-                    unsafe {
-                        keys.free(&self.allocator);
-                    }
-                }
-
-                // TODO: Store keys on state.
+                // Store the keys on state.
+                self.state[key].keys = keys;
 
                 decision
             }
@@ -329,6 +322,14 @@ where
         // Remove the tx from state & drop the allocation if requested.
         if decision == TxDecision::Drop {
             let state = self.state.remove(key).unwrap();
+
+            if let Some(keys) = state.keys {
+                // SAFETY
+                // - We own these pointers/allocations exclusively.
+                unsafe {
+                    keys.free(&self.allocator);
+                }
+            }
 
             // SAFETY
             // - We own `tx` exclusively.
