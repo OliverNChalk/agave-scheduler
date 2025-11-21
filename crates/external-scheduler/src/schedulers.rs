@@ -1,7 +1,8 @@
 use agave_bridge::SchedulerBindings;
 use agave_schedulers::batch::BatchScheduler;
 use agave_schedulers::fifo::FifoScheduler;
-use agave_schedulers::greedy::{self, GreedyScheduler};
+use agave_schedulers::greedy::GreedyScheduler;
+use agave_schedulers::shared::PriorityId;
 
 pub(crate) trait Scheduler {
     type Meta: Copy;
@@ -11,7 +12,7 @@ pub(crate) trait Scheduler {
 }
 
 impl Scheduler for BatchScheduler {
-    type Meta = ();
+    type Meta = PriorityId;
 
     fn new() -> Self {
         BatchScheduler::new()
@@ -35,7 +36,7 @@ impl Scheduler for FifoScheduler {
 }
 
 impl Scheduler for GreedyScheduler {
-    type Meta = greedy::PriorityId;
+    type Meta = PriorityId;
 
     fn new() -> Self {
         GreedyScheduler::new()
