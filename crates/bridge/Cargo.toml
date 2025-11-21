@@ -1,5 +1,5 @@
 [package]
-name = "bridge"
+name = "agave-bridge"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

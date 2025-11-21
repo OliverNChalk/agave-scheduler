@@ -33,12 +33,12 @@ too_many_lines = "allow"
 trivially_copy_pass_by_ref = "warn"
 
 [workspace.dependencies]
+agave-bridge.path = "./crates/bridge"
 agave-feature-set = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 agave-scheduler-bindings = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 agave-scheduling-utils = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 agave-transaction-view = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 bincode = "1.3.3"
-bridge.path = "./crates/bridge"
 clap = "4.5.51"
 futures = { version = "0.3.31", default-features = false }
 greedy.path = "./crates/greedy"

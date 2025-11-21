@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use agave_bridge::SchedulerBindings;
 use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client};
-use bridge::SchedulerBindings;
 use greedy::{GreedyScheduler, PriorityId};
 use toolbox::shutdown::Shutdown;
 

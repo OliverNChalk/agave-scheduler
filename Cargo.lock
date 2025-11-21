@@ -9,6 +9,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agave-bridge"
+version = "0.1.0"
+dependencies = [
+ "agave-feature-set",
+ "agave-scheduler-bindings",
+ "agave-scheduling-utils",
+ "agave-transaction-view",
+ "bincode",
+ "rts-alloc",
+ "shaq",
+ "slotmap",
+ "solana-fee",
+ "solana-pubkey 3.0.0",
+ "solana-transaction",
+]
+
+[[package]]
+name = "agave-external-scheduler"
+version = "0.1.0"
+dependencies = [
+ "agave-bridge",
+ "agave-scheduling-utils",
+ "clap",
+ "futures",
+ "greedy",
+ "metrics-nats-exporter",
+ "serde",
+ "serde_yaml",
+ "tokio",
+ "toolbox",
+ "tracing",
+]
+
+[[package]]
 name = "agave-feature-set"
 version = "4.0.0-alpha.0"
 source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#dd48f29787a2acabeb9d0b29bfa3b1f4331f7a95"
@@ -607,23 +641,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.109",
-]
-
-[[package]]
-name = "bridge"
-version = "0.1.0"
-dependencies = [
- "agave-feature-set",
- "agave-scheduler-bindings",
- "agave-scheduling-utils",
- "agave-transaction-view",
- "bincode",
- "rts-alloc",
- "shaq",
- "slotmap",
- "solana-fee",
- "solana-pubkey 3.0.0",
- "solana-transaction",
 ]
 
 [[package]]
@@ -1230,8 +1247,8 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 name = "fifo"
 version = "0.1.0"
 dependencies = [
+ "agave-bridge",
  "agave-scheduler-bindings",
- "bridge",
 ]
 
 [[package]]
@@ -1468,11 +1485,11 @@ dependencies = [
 name = "greedy"
 version = "0.1.0"
 dependencies = [
+ "agave-bridge",
  "agave-scheduler-bindings",
  "agave-scheduling-utils",
  "agave-transaction-view",
  "bincode",
- "bridge",
  "hashbrown 0.16.0",
  "metrics",
  "min-max-heap",
@@ -1490,23 +1507,6 @@ dependencies = [
  "solana-system-transaction",
  "solana-transaction",
  "static_assertions",
-]
-
-[[package]]
-name = "greedy-external"
-version = "0.1.0"
-dependencies = [
- "agave-scheduling-utils",
- "bridge",
- "clap",
- "futures",
- "greedy",
- "metrics-nats-exporter",
- "serde",
- "serde_yaml",
- "tokio",
- "toolbox",
- "tracing",
 ]
 
 [[package]]

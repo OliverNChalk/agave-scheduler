@@ -1,6 +1,10 @@
 #[macro_use]
 extern crate static_assertions;
 
+use agave_bridge::{
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker,
+    WorkerAction, WorkerResponse,
+};
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
     CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
@@ -11,10 +15,6 @@ use agave_scheduler_bindings::{
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
-use bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker,
-    WorkerAction, WorkerResponse,
-};
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -449,8 +449,8 @@ impl Ord for PriorityId {
 
 #[cfg(test)]
 mod tests {
+    use agave_bridge::TestBridge;
     use agave_scheduler_bindings::{IS_NOT_LEADER, ProgressMessage};
-    use bridge::TestBridge;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Pubkey, Signer};
