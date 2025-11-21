@@ -1,10 +1,9 @@
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{
-    CheckResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
+    CheckResponse, ExecutionResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
@@ -24,15 +23,13 @@ use crate::{
 pub struct TestBridge<M> {
     progress_queue: VecDeque<ProgressMessage>,
     tpu_queue: VecDeque<TransactionId>,
-    worker_queues: Vec<VecDeque<WorkerResponse<'static, M>>>,
+    worker_queues: Vec<VecDeque<(KeyedTransactionMeta<M>, WorkerActionLite)>>,
     workers: Vec<TestWorker>,
     scheduled: VecDeque<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>>,
 
     progress: ProgressMessage,
     runtime: RuntimeState,
     state: SlotMap<TransactionId, TransactionState>,
-
-    _meta: PhantomData<M>,
 }
 
 impl<M> TestBridge<M>
@@ -63,8 +60,6 @@ where
                 burn_percent: 50,
             },
             state: SlotMap::default(),
-
-            _meta: PhantomData,
         }
     }
 
@@ -101,14 +96,9 @@ where
 
         // Insert the keys (if any).
         self.state[tx.key].keys = keys;
-        let state = &self.state[tx.key];
 
-        self.worker_queues[batch.worker].push_back(WorkerResponse {
-            key: tx.key,
-            meta: tx.meta,
-            // TODO: Need WorkerActionTest or something that doesn't take a ref until JIT.
-            response: WorkerAction::Check(self.check_ok(), state.keys.as_ref()),
-        });
+        let rep = (tx, WorkerActionLite::Check(self.check_ok()));
+        self.worker_queues[batch.worker].push_back(rep);
     }
 
     pub fn queue_all_checks_ok(&mut self) {
@@ -116,18 +106,8 @@ where
             assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
             assert!(batch.max_working_slot >= self.progress.current_slot);
 
-            for KeyedTransactionMeta { key, meta } in &batch.transactions {
-                self.queue_response(
-                    &batch,
-                    WorkerResponse {
-                        key: *key,
-                        meta: *meta,
-                        response: WorkerAction::Check(
-                            self.check_ok(SharablePubkeys { offset: 0, num_pubkeys: 0 }),
-                            None,
-                        ),
-                    },
-                );
+            for i in 0..batch.transactions.len() {
+                self.queue_check_response(&batch, i, None);
             }
         }
     }
@@ -216,28 +196,52 @@ where
         worker: usize,
         mut cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
     ) -> bool {
-        let Some(WorkerResponse { key, meta, response }) = self.worker_queues[worker].pop_front()
+        let Some((KeyedTransactionMeta { key, meta }, rep)) =
+            self.worker_queues[worker].pop_front()
         else {
             return false;
         };
 
-        if cb(self, WorkerResponse { key, meta, response }) == TxDecision::Drop {
-            let state = self.state.remove(key).unwrap();
+        // Temporarily take keys to avoid mutable aliasing self.
+        let keys = self.state[key].keys.take();
+        let response = match rep {
+            WorkerActionLite::Unprocessed => WorkerAction::Unprocessed,
+            WorkerActionLite::Check(rep) => WorkerAction::Check(rep, keys.as_ref()),
+            WorkerActionLite::Execute(rep) => WorkerAction::Execute(rep),
+        };
 
-            // Extract the raw parts of the allocation.
-            let data = state.data.inner_data().data();
-            let len = data.len();
-            let ptr = data.as_ptr();
-            drop(state);
+        match cb(self, WorkerResponse { key, meta, response }) {
+            // Restore keys.
+            TxDecision::Keep => self.state[key].keys = keys,
+            TxDecision::Drop => {
+                let state = self.state.remove(key).unwrap();
 
-            // Recover the underlying allocation so we can drop it.
-            //
-            // SAFETY
-            // - We original allocated this and exclusively own it, so it's safe for us to
-            //   deallocate.
-            unsafe {
-                let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
-                core::ptr::drop_in_place(allocation);
+                // Drop the underlying transaction allocation.
+                let data = state.data.inner_data().data();
+                let len = data.len();
+                let ptr = data.as_ptr();
+                drop(state);
+                // SAFETY
+                // - We original allocated this and exclusively own it, so it's safe for us to
+                //   deallocate.
+                unsafe {
+                    let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
+                    core::ptr::drop_in_place(allocation);
+                }
+
+                // Drop the underlying pubkeys allocation.
+                if let Some(keys) = keys {
+                    let slice = keys.as_slice();
+                    let len = slice.len();
+                    let ptr = slice.as_ptr();
+                    // SAFETY
+                    // - We original allocated this and exclusively own it, so it's safe for us to
+                    //   deallocate.
+                    unsafe {
+                        let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
+                        core::ptr::drop_in_place(allocation);
+                    }
+                }
             }
         }
 
@@ -275,9 +279,17 @@ impl Worker for TestWorker {
     }
 }
 
+#[derive(Debug, Clone)]
+enum WorkerActionLite {
+    Unprocessed,
+    Check(CheckResponse),
+    Execute(ExecutionResponse),
+}
+
 pub mod utils {
     use super::*;
 
+    // TODO: Remove.
     pub fn leak_pubkeys(mut pubkeys: Vec<Pubkey>) -> &'static PubkeysPtr {
         // Get the raw pointer components.
         let len = pubkeys.len();

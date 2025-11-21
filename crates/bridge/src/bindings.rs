@@ -320,6 +320,8 @@ where
                     }
                 }
 
+                // TODO: Store keys on state.
+
                 decision
             }
         };

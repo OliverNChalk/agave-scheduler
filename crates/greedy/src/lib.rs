@@ -677,13 +677,7 @@ mod tests {
             WorkerResponse {
                 key: batch.transactions[0].key,
                 meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(
-                    bridge.check_ok(SharablePubkeys {
-                        offset: 0,
-                        num_pubkeys: resolved_pubkeys.as_slice().len() as u32,
-                    }),
-                    Some(resolved_pubkeys),
-                ),
+                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
             },
         );
         scheduler.poll(&mut bridge);
@@ -700,13 +694,7 @@ mod tests {
             WorkerResponse {
                 key: batch.transactions[0].key,
                 meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(
-                    bridge.check_ok(SharablePubkeys {
-                        offset: 0,
-                        num_pubkeys: resolved_pubkeys.as_slice().len() as u32,
-                    }),
-                    Some(resolved_pubkeys),
-                ),
+                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
             },
         );
         scheduler.poll(&mut bridge);
@@ -750,13 +738,7 @@ mod tests {
             WorkerResponse {
                 key: batch.transactions[0].key,
                 meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(
-                    bridge.check_ok(SharablePubkeys {
-                        offset: 0,
-                        num_pubkeys: resolved_pubkeys.as_slice().len() as u32,
-                    }),
-                    Some(resolved_pubkeys),
-                ),
+                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
             },
         );
         scheduler.poll(&mut bridge);
@@ -773,13 +755,7 @@ mod tests {
             WorkerResponse {
                 key: batch.transactions[0].key,
                 meta: batch.transactions[0].meta,
-                response: WorkerAction::Check(
-                    bridge.check_ok(SharablePubkeys {
-                        offset: 0,
-                        num_pubkeys: resolved_pubkeys.as_slice().len() as u32,
-                    }),
-                    Some(resolved_pubkeys),
-                ),
+                response: WorkerAction::Check(bridge.check_ok(), Some(resolved_pubkeys)),
             },
         );
         scheduler.poll(&mut bridge);
