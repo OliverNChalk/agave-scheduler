@@ -1,4 +1,5 @@
 use agave_bridge::SchedulerBindings;
+use agave_schedulers::batch::BatchScheduler;
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::{self, GreedyScheduler};
 
@@ -7,6 +8,18 @@ pub(crate) trait Scheduler {
 
     fn new() -> Self;
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>);
+}
+
+impl Scheduler for BatchScheduler {
+    type Meta = ();
+
+    fn new() -> Self {
+        BatchScheduler::new()
+    }
+
+    fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>) {
+        self.poll(bridge);
+    }
 }
 
 impl Scheduler for FifoScheduler {
