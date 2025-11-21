@@ -2,6 +2,7 @@ mod args;
 mod config;
 mod control_thread;
 mod scheduler_thread;
+mod schedulers;
 
 fn main() -> std::thread::Result<()> {
     use clap::Parser;
@@ -29,5 +30,5 @@ fn main() -> std::thread::Result<()> {
     let config = serde_yaml::from_slice(&toolbox::fs::must_read(&args.config)).unwrap();
 
     // Start server.
-    ControlThread::run_in_place(config, args.bindings_ipc)
+    ControlThread::run_in_place(args, config)
 }

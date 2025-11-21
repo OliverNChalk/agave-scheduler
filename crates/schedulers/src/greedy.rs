@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate static_assertions;
-
 use agave_bridge::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker,
     WorkerAction, WorkerResponse,

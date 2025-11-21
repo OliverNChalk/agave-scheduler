@@ -30,10 +30,10 @@ name = "agave-external-scheduler"
 version = "0.1.0"
 dependencies = [
  "agave-bridge",
+ "agave-schedulers",
  "agave-scheduling-utils",
  "clap",
  "futures",
- "greedy",
  "metrics-nats-exporter",
  "serde",
  "serde_yaml",
@@ -59,6 +59,34 @@ dependencies = [
 name = "agave-scheduler-bindings"
 version = "4.0.0-alpha.0"
 source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#dd48f29787a2acabeb9d0b29bfa3b1f4331f7a95"
+
+[[package]]
+name = "agave-schedulers"
+version = "0.1.0"
+dependencies = [
+ "agave-bridge",
+ "agave-scheduler-bindings",
+ "agave-scheduling-utils",
+ "agave-transaction-view",
+ "bincode",
+ "hashbrown 0.16.0",
+ "metrics",
+ "min-max-heap",
+ "solana-compute-budget-instruction",
+ "solana-compute-budget-interface",
+ "solana-cost-model",
+ "solana-fee",
+ "solana-fee-structure",
+ "solana-hash 3.1.0",
+ "solana-keypair",
+ "solana-message",
+ "solana-pubkey 3.0.0",
+ "solana-runtime-transaction",
+ "solana-svm-transaction",
+ "solana-system-transaction",
+ "solana-transaction",
+ "static_assertions",
+]
 
 [[package]]
 name = "agave-scheduling-utils"
@@ -1244,14 +1272,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
-name = "fifo"
-version = "0.1.0"
-dependencies = [
- "agave-bridge",
- "agave-scheduler-bindings",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1479,34 +1499,6 @@ dependencies = [
  "r-efi",
  "wasip2",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "greedy"
-version = "0.1.0"
-dependencies = [
- "agave-bridge",
- "agave-scheduler-bindings",
- "agave-scheduling-utils",
- "agave-transaction-view",
- "bincode",
- "hashbrown 0.16.0",
- "metrics",
- "min-max-heap",
- "solana-compute-budget-instruction",
- "solana-compute-budget-interface",
- "solana-cost-model",
- "solana-fee",
- "solana-fee-structure",
- "solana-hash 3.1.0",
- "solana-keypair",
- "solana-message",
- "solana-pubkey 3.0.0",
- "solana-runtime-transaction",
- "solana-svm-transaction",
- "solana-system-transaction",
- "solana-transaction",
- "static_assertions",
 ]
 
 [[package]]

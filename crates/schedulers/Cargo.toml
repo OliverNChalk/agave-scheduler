@@ -1,5 +1,5 @@
 [package]
-name = "greedy"
+name = "agave-schedulers"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

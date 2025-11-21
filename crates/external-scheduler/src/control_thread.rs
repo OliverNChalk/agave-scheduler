@@ -1,6 +1,7 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
+use agave_schedulers::fifo::FifoScheduler;
+use agave_schedulers::greedy::GreedyScheduler;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use tokio::runtime::Runtime;
@@ -9,8 +10,8 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
+use crate::args::{Args, SchedulerVariant};
 use crate::config::Config;
-use crate::scheduler_thread::SchedulerThread;
 
 pub(crate) struct ControlThread {
     shutdown: Shutdown,
@@ -18,17 +19,17 @@ pub(crate) struct ControlThread {
 }
 
 impl ControlThread {
-    pub(crate) fn run_in_place(config: Config, bindings_ipc: PathBuf) -> std::thread::Result<()> {
+    pub(crate) fn run_in_place(args: Args, config: Config) -> std::thread::Result<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let server = rt.block_on(ControlThread::setup(&rt, config, bindings_ipc));
+        let server = rt.block_on(ControlThread::setup(&rt, args, config));
 
         rt.block_on(server.run())
     }
 
-    async fn setup(runtime: &Runtime, config: Config, bindings_ipc: PathBuf) -> Self {
+    async fn setup(runtime: &Runtime, args: Args, config: Config) -> Self {
         let shutdown = Shutdown::new();
 
         // Spawn metrics publisher.
@@ -52,7 +53,16 @@ impl ControlThread {
         );
 
         // Spawn scheduler.
-        threads.push(SchedulerThread::spawn(shutdown.clone(), bindings_ipc));
+        let scheduler = match args.scheduler {
+            SchedulerVariant::Fifo => {
+                crate::scheduler_thread::spawn::<FifoScheduler>(shutdown.clone(), args.bindings_ipc)
+            }
+            SchedulerVariant::Greedy => crate::scheduler_thread::spawn::<GreedyScheduler>(
+                shutdown.clone(),
+                args.bindings_ipc,
+            ),
+        };
+        threads.push(scheduler);
 
         // Use tokio to listen on all thread exits concurrently.
         let threads = threads
