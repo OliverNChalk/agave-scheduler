@@ -1,5 +1,5 @@
 [package]
-name = "greedy"
+name = "agave-schedulers"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,10 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+agave-bridge.workspace = true
 agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 agave-transaction-view.workspace = true
-bridge.workspace = true
 hashbrown.workspace = true
 metrics.workspace = true
 min-max-heap.workspace = true
@@ -27,8 +27,8 @@ solana-transaction.workspace = true
 static_assertions.workspace = true
 
 [dev-dependencies]
+agave-bridge = { workspace = true, features = ["testing"] }
 bincode.workspace = true
-bridge = { workspace = true, features = ["testing"] }
 solana-compute-budget-interface.workspace = true
 solana-hash.workspace = true
 solana-keypair.workspace = true
