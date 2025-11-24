@@ -1,3 +1,5 @@
+mod jito_thread;
+
 use agave_bridge::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TxDecision, Worker, WorkerAction,
     WorkerResponse,

@@ -8,12 +8,17 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+batch = ["dep:crossbeam-channel", "dep:jito-protos", "dep:tokio"]
+
 [dependencies]
 agave-bridge.workspace = true
 agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 agave-transaction-view.workspace = true
+crossbeam-channel = { workspace = true, optional = true }
 hashbrown.workspace = true
+jito-protos = { workspace = true, optional = true }
 metrics.workspace = true
 min-max-heap.workspace = true
 solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
@@ -25,6 +30,7 @@ solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api
 solana-svm-transaction.workspace = true
 solana-transaction.workspace = true
 static_assertions.workspace = true
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 agave-bridge = { workspace = true, features = ["testing"] }
