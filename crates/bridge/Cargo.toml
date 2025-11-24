@@ -23,3 +23,6 @@ slotmap.workspace = true
 solana-fee = { workspace = true, features = ["agave-unstable-api"] }
 solana-pubkey.workspace = true
 solana-transaction = { workspace = true, optional = true }
+
+[dev-dependencies]
+agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api", "dev-context-only-utils"] }
