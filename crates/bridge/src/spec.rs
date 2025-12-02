@@ -22,9 +22,6 @@ pub trait Bridge {
 
     fn tx(&self, key: TransactionKey) -> &TransactionState;
 
-    // TODO: Need to think about how we want to handle bundles. Can probably just
-    // call insert for all constituent transactions but then store their IDs in a
-    // bundle storage? Then when we go to schedule we can set the appropriate flags.
     fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionKey, TransactionViewError>;
 
     fn tx_drop(&mut self, key: TransactionKey);
