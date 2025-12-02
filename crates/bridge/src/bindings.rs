@@ -15,6 +15,7 @@ use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
+use solana_packet::PACKET_DATA_SIZE;
 
 use crate::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
@@ -155,7 +156,7 @@ where
     }
 
     fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionId, TransactionViewError> {
-        assert!(tx.len() <= 1232);
+        assert!(tx.len() <= PACKET_DATA_SIZE);
 
         let ptr = self
             .allocator

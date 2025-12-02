@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["prost", "prost-types"]
+
 [lints]
 workspace = true
 

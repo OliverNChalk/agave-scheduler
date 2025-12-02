@@ -175,7 +175,7 @@ where
         &self.state[key]
     }
 
-    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionId, TransactionViewError> {
+    fn tx_insert(&mut self, _: &[u8]) -> Result<TransactionId, TransactionViewError> {
         unimplemented!()
     }
 

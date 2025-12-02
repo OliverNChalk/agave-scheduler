@@ -45,7 +45,7 @@ const CHECK_WORKER: usize = 0;
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
 pub struct BatchScheduler {
-    bundle_rx: crossbeam_channel::Receiver<()>,
+    bundle_rx: crossbeam_channel::Receiver<Vec<Vec<u8>>>,
 
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,

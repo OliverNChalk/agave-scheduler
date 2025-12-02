@@ -14,6 +14,7 @@ batch = [
   "dep:eyre",
   "dep:jito-protos",
   "dep:solana-keypair",
+  "dep:solana-packet",
   "dep:tokio",
   "dep:tonic",
   "dep:tracing",
@@ -35,6 +36,7 @@ solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee-structure.workspace = true
 solana-keypair = { workspace = true, optional = true }
+solana-packet = { workspace = true, optional = true }
 solana-pubkey.workspace = true
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
 solana-svm-transaction.workspace = true

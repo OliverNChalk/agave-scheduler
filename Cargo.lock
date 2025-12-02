@@ -21,6 +21,7 @@ dependencies = [
  "shaq",
  "slotmap",
  "solana-fee",
+ "solana-packet 3.0.0",
  "solana-pubkey 3.0.0",
  "solana-transaction",
 ]
@@ -83,6 +84,7 @@ dependencies = [
  "solana-hash 3.1.0",
  "solana-keypair",
  "solana-message",
+ "solana-packet 3.0.0",
  "solana-pubkey 3.0.0",
  "solana-runtime-transaction",
  "solana-svm-transaction",
@@ -160,7 +162,7 @@ source = "git+https://github.com/OliverNChalk/agave?branch=temp%2Fgreedy#af5d4e8
 dependencies = [
  "solana-hash 3.1.0",
  "solana-message",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-pubkey 3.0.0",
  "solana-sdk-ids",
  "solana-short-vec",
@@ -3792,7 +3794,7 @@ dependencies = [
  "solana-instruction",
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-program-entrypoint",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
@@ -3866,7 +3868,7 @@ dependencies = [
  "solana-compute-budget",
  "solana-compute-budget-interface",
  "solana-instruction",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-pubkey 3.0.0",
  "solana-sdk-ids",
  "solana-svm-transaction",
@@ -3910,7 +3912,7 @@ dependencies = [
  "solana-compute-budget-interface",
  "solana-fee-structure",
  "solana-metrics",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-pubkey 3.0.0",
  "solana-runtime-transaction",
  "solana-sdk-ids",
@@ -4163,7 +4165,7 @@ dependencies = [
  "solana-instruction",
  "solana-loader-v3-interface",
  "solana-loader-v4-interface",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-sbpf",
@@ -4242,6 +4244,15 @@ dependencies = [
  "solana-hash 3.1.0",
  "solana-nonce",
  "solana-sdk-ids",
+]
+
+[[package]]
+name = "solana-packet"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6edf2f25743c95229ac0fdc32f8f5893ef738dbf332c669e9861d33ddb0f469d"
+dependencies = [
+ "bitflags 2.10.0",
 ]
 
 [[package]]
@@ -4675,7 +4686,7 @@ dependencies = [
  "solana-instruction",
  "solana-nonce",
  "solana-nonce-account",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-sdk-ids",
@@ -4843,7 +4854,7 @@ dependencies = [
  "solana-hash 3.1.0",
  "solana-instruction",
  "solana-keypair",
- "solana-packet",
+ "solana-packet 4.0.0",
  "solana-program-runtime",
  "solana-pubkey 3.0.0",
  "solana-rent",

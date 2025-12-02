@@ -12,6 +12,7 @@ use jito_protos::block_engine::{
     SubscribePacketsResponse,
 };
 use solana_keypair::{Keypair, Signer};
+use solana_packet::PACKET_DATA_SIZE;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
@@ -22,14 +23,14 @@ pub(crate) struct JitoConfig {
 }
 
 pub(crate) struct JitoThread {
-    bundle_tx: crossbeam_channel::Sender<()>,
+    bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
     endpoint: Endpoint,
     keypair: Keypair,
 }
 
 impl JitoThread {
     pub(crate) fn spawn(
-        bundle_tx: crossbeam_channel::Sender<()>,
+        bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
         config: JitoConfig,
         keypair: Keypair,
     ) -> JoinHandle<()> {
@@ -137,7 +138,22 @@ impl JitoThread {
     }
 
     fn on_bundles(&self, bundles: SubscribeBundlesResponse) {
-        todo!()
+        for bundle in bundles
+            .bundles
+            .into_iter()
+            .filter_map(|bundle| bundle.bundle)
+            .map(|bundle| {
+                bundle
+                    .packets
+                    .into_iter()
+                    .map(|packet| packet.data)
+                    .inspect(|packet| assert!(packet.len() <= PACKET_DATA_SIZE))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|bundle| !bundle.is_empty())
+        {
+            self.bundle_tx.try_send(bundle).unwrap();
+        }
     }
 
     fn on_packets(&self, packets: SubscribePacketsResponse) {

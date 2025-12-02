@@ -7,7 +7,6 @@ use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use solana_fee::FeeFeatures;
 use solana_pubkey::Pubkey;
-use solana_transaction::TransactionError;
 
 pub trait Bridge {
     type Worker: Worker;
