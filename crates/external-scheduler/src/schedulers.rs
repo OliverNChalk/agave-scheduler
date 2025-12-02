@@ -1,20 +1,25 @@
+use std::thread::JoinHandle;
+
 use agave_bridge::SchedulerBindings;
 use agave_schedulers::batch::BatchScheduler;
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use agave_schedulers::shared::PriorityId;
 
-pub(crate) trait Scheduler {
+pub(crate) trait Scheduler
+where
+    Self: Sized + 'static,
+{
     type Meta: Copy;
 
-    fn new() -> Self;
+    fn new() -> (Self, Vec<JoinHandle<()>>);
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>);
 }
 
 impl Scheduler for BatchScheduler {
     type Meta = PriorityId;
 
-    fn new() -> Self {
+    fn new() -> (Self, Vec<JoinHandle<()>>) {
         BatchScheduler::new()
     }
 
@@ -26,8 +31,8 @@ impl Scheduler for BatchScheduler {
 impl Scheduler for FifoScheduler {
     type Meta = ();
 
-    fn new() -> Self {
-        FifoScheduler::new()
+    fn new() -> (Self, Vec<JoinHandle<()>>) {
+        (FifoScheduler::new(), vec![])
     }
 
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>) {
@@ -38,8 +43,8 @@ impl Scheduler for FifoScheduler {
 impl Scheduler for GreedyScheduler {
     type Meta = PriorityId;
 
-    fn new() -> Self {
-        GreedyScheduler::new()
+    fn new() -> (Self, Vec<JoinHandle<()>>) {
+        (GreedyScheduler::new(), vec![])
     }
 
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>) {

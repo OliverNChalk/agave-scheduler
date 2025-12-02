@@ -8,11 +8,12 @@ use toolbox::shutdown::Shutdown;
 
 use crate::schedulers::Scheduler;
 
-pub(crate) fn spawn<S>(shutdown: Shutdown, bindings_ipc: PathBuf) -> JoinHandle<()>
+pub(crate) fn spawn<S>(shutdown: Shutdown, bindings_ipc: PathBuf) -> Vec<JoinHandle<()>>
 where
     S: Scheduler + Send,
 {
-    std::thread::Builder::new()
+    let (mut scheduler, mut threads) = S::new();
+    let scheduler_thread = std::thread::Builder::new()
         .name("Scheduler".to_string())
         .spawn(move || {
             let session = handshake_client::connect(
@@ -31,11 +32,13 @@ where
             )
             .unwrap();
             let mut bridge = SchedulerBindings::new(session);
-            let mut scheduler = S::new();
 
             while !shutdown.is_shutdown() {
                 scheduler.poll(&mut bridge);
             }
         })
-        .unwrap()
+        .unwrap();
+    threads.insert(0, scheduler_thread);
+
+    threads
 }

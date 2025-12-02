@@ -1,5 +1,7 @@
 mod jito_thread;
 
+use std::thread::JoinHandle;
+
 use agave_bridge::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TxDecision, Worker, WorkerAction,
     WorkerResponse,
@@ -43,6 +45,8 @@ const CHECK_WORKER: usize = 0;
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
 pub struct BatchScheduler {
+    bundle_rx: crossbeam_channel::Receiver<()>,
+
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
     cu_in_flight: u32,
@@ -54,7 +58,7 @@ pub struct BatchScheduler {
 
 impl BatchScheduler {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new() -> (Self, Vec<JoinHandle<()>>) {
         let (bundle_tx, bundle_rx) = crossbeam_channel::bounded(128);
         let keypair = Keypair::new();
         let jito_thread = JitoThread::spawn(
@@ -63,15 +67,20 @@ impl BatchScheduler {
             keypair,
         );
 
-        Self {
-            unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-            checked: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
-            cu_in_flight: 0,
-            schedule_locks: HashMap::default(),
-            schedule_batch: Vec::default(),
+        (
+            Self {
+                bundle_rx,
 
-            metrics: BatchMetrics::new(),
-        }
+                unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+                checked: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
+                cu_in_flight: 0,
+                schedule_locks: HashMap::default(),
+                schedule_batch: Vec::default(),
+
+                metrics: BatchMetrics::new(),
+            },
+            vec![jito_thread],
+        )
     }
 
     pub fn poll<B>(&mut self, bridge: &mut B)
