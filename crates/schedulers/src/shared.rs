@@ -1,11 +1,11 @@
-use agave_bridge::TransactionId;
+use agave_bridge::TransactionKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct PriorityId {
     pub(crate) priority: u64,
     pub(crate) cost: u32,
-    pub(crate) key: TransactionId,
+    pub(crate) key: TransactionKey,
 }
 
 impl PartialOrd for PriorityId {

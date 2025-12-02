@@ -1,10 +1,11 @@
 mod jito_thread;
 
+use std::collections::VecDeque;
 use std::thread::JoinHandle;
 
 use agave_bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TxDecision, Worker, WorkerAction,
-    WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
+    WorkerAction, WorkerResponse,
 };
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
@@ -47,8 +48,10 @@ const BLOCK_FILL_CUTOFF: u8 = 20;
 pub struct BatchScheduler {
     bundle_rx: crossbeam_channel::Receiver<Vec<Vec<u8>>>,
 
-    unchecked: MinMaxHeap<PriorityId>,
-    checked: MinMaxHeap<PriorityId>,
+    // TODO: Bundles should be sorted against transactions.
+    bundles: VecDeque<Vec<TransactionKey>>,
+    unchecked_tx: MinMaxHeap<PriorityId>,
+    checked_tx: MinMaxHeap<PriorityId>,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
@@ -71,11 +74,12 @@ impl BatchScheduler {
             Self {
                 bundle_rx,
 
-                unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                checked: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
+                bundles: VecDeque::new(),
+                unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+                checked_tx: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
                 cu_in_flight: 0,
-                schedule_locks: HashMap::default(),
-                schedule_batch: Vec::default(),
+                schedule_locks: HashMap::new(),
+                schedule_batch: Vec::new(),
 
                 metrics: BatchMetrics::new(),
             },
@@ -104,6 +108,9 @@ impl BatchScheduler {
             false => self.drain_tpu(bridge, 1024),
         }
 
+        // Drain pending bundles.
+        self.drain_bundles(bridge);
+
         // Queue additional checks.
         self.schedule_checks(bridge);
 
@@ -117,8 +124,10 @@ impl BatchScheduler {
         self.metrics
             .next_leader_slot
             .set(bridge.progress().next_leader_slot as f64);
-        self.metrics.unchecked_len.set(self.unchecked.len() as f64);
-        self.metrics.checked_len.set(self.checked.len() as f64);
+        self.metrics
+            .unchecked_len
+            .set(self.unchecked_tx.len() as f64);
+        self.metrics.checked_len.set(self.checked_tx.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
@@ -142,12 +151,12 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         let additional = std::cmp::min(bridge.tpu_len(), max_count);
-        let shortfall = (self.checked.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
+        let shortfall = (self.checked_tx.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
 
         // NB: Technically we are evicting more than we need to because not all of
         // `additional` will parse correctly & thus have a priority.
         for _ in 0..shortfall {
-            let id = self.unchecked.pop_min().unwrap();
+            let id = self.unchecked_tx.pop_min().unwrap();
 
             bridge.tx_drop(id.key);
         }
@@ -158,7 +167,7 @@ impl BatchScheduler {
         bridge.tpu_drain(
             |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
-                    self.unchecked.push(PriorityId { priority, cost, key });
+                    self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.metrics.recv_ok.increment(1);
 
                     TxDecision::Keep
@@ -173,20 +182,42 @@ impl BatchScheduler {
         );
     }
 
+    fn drain_bundles<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        'outer: while let Ok(bundle) = self.bundle_rx.try_recv() {
+            let mut keys = Vec::with_capacity(bundle.len());
+            for packet in bundle {
+                let Ok(key) = bridge.tx_insert(&packet) else {
+                    for key in keys {
+                        bridge.tx_drop(key);
+                    }
+
+                    continue 'outer;
+                };
+
+                keys.push(key);
+            }
+
+            self.bundles.push_back(keys);
+        }
+    }
+
     fn schedule_checks<B>(&mut self, bridge: &mut B)
     where
         B: Bridge<Meta = PriorityId>,
     {
         // Loop until worker queue is filled or backlog is empty.
-        let start_len = self.unchecked.len();
+        let start_len = self.unchecked_tx.len();
         while bridge.worker(0).rem() > 0 {
-            if self.unchecked.is_empty() {
+            if self.unchecked_tx.is_empty() {
                 break;
             }
 
             self.schedule_batch.clear();
             self.schedule_batch.extend(std::iter::from_fn(|| {
-                self.unchecked
+                self.unchecked_tx
                     .pop_max()
                     .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
             }));
@@ -204,7 +235,7 @@ impl BatchScheduler {
         // Update metrics with our scheduled amount.
         self.metrics
             .check_requested
-            .increment((start_len - self.unchecked.len()) as u64);
+            .increment((start_len - self.unchecked_tx.len()) as u64);
     }
 
     fn schedule_execute<B>(&mut self, bridge: &mut B)
@@ -224,7 +255,7 @@ impl BatchScheduler {
             + u64::from(self.cu_in_flight);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in 1..bridge.worker_count() {
-            if budget_remaining == 0 || self.checked.is_empty() {
+            if budget_remaining == 0 || self.checked_tx.is_empty() {
                 break;
             }
 
@@ -234,12 +265,12 @@ impl BatchScheduler {
             }
 
             let pop_next = || {
-                self.checked
+                self.checked_tx
                     .pop_max()
                     .filter(|id| {
                         // Check if we can fit the TX within our budget.
                         if u64::from(id.cost) > budget_remaining {
-                            self.checked.push(*id);
+                            self.checked_tx.push(*id);
 
                             return false;
                         }
@@ -256,7 +287,7 @@ impl BatchScheduler {
                                     .is_some_and(|writable| writable)
                             })
                         {
-                            self.checked.push(*id);
+                            self.checked_tx.push(*id);
                             budget_remaining = 0;
 
                             return false;
@@ -324,8 +355,8 @@ impl BatchScheduler {
         assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
 
         // Evict lowest priority if at capacity.
-        if self.checked.len() == CHECKED_CAPACITY {
-            let id = self.checked.pop_min().unwrap();
+        if self.checked_tx.len() == CHECKED_CAPACITY {
+            let id = self.checked_tx.pop_min().unwrap();
             bridge.tx_drop(id.key);
 
             self.metrics.check_evict.increment(1);
@@ -333,7 +364,7 @@ impl BatchScheduler {
 
         // Insert the new transaction (yes this may be lower priority then what
         // we just evicted but that's fine).
-        self.checked.push(meta);
+        self.checked_tx.push(meta);
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);

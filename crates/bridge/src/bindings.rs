@@ -18,7 +18,7 @@ use solana_fee::FeeFeatures;
 use solana_packet::PACKET_DATA_SIZE;
 
 use crate::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
     TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 
@@ -30,7 +30,7 @@ pub struct SchedulerBindings<M> {
 
     progress: ProgressMessage,
     runtime: RuntimeState,
-    state: SlotMap<TransactionId, TransactionState>,
+    state: SlotMap<TransactionKey, TransactionState>,
     worker_response: Option<WorkerResponsePointers<M>>,
 }
 
@@ -40,7 +40,7 @@ where
 {
     // TODO: Duplicated from scheduling_utils::transaction_ptr.
     const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
-    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
+    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionKey>();
     const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
     const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
     #[allow(dead_code, reason = "Invariant assertion")]
@@ -80,7 +80,7 @@ where
 
     fn collect_batch(
         allocator: &Allocator,
-        state: &SlotMap<TransactionId, TransactionState>,
+        state: &SlotMap<TransactionKey, TransactionState>,
         batch: &[KeyedTransactionMeta<M>],
     ) -> SharableTransactionBatchRegion {
         assert!(batch.len() <= MAX_TRANSACTIONS_PER_MESSAGE);
@@ -151,11 +151,11 @@ where
         &mut self.workers[id]
     }
 
-    fn tx(&self, key: TransactionId) -> &crate::TransactionState {
+    fn tx(&self, key: TransactionKey) -> &crate::TransactionState {
         &self.state[key]
     }
 
-    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionId, TransactionViewError> {
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionKey, TransactionViewError> {
         assert!(tx.len() <= PACKET_DATA_SIZE);
 
         let ptr = self
@@ -182,7 +182,7 @@ where
         }
     }
 
-    fn tx_drop(&mut self, key: TransactionId) {
+    fn tx_drop(&mut self, key: TransactionKey) {
         let state = self.state.remove(key).unwrap();
 
         // SAFETY
@@ -208,7 +208,7 @@ where
 
     fn tpu_drain(
         &mut self,
-        mut cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, TransactionKey) -> TxDecision,
         max_count: usize,
     ) {
         self.tpu_to_pack.sync();
