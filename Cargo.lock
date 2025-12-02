@@ -91,6 +91,7 @@ dependencies = [
  "static_assertions",
  "tokio",
  "tonic",
+ "tracing",
 ]
 
 [[package]]

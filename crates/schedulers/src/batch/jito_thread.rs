@@ -15,6 +15,7 @@ use solana_keypair::{Keypair, Signer};
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
+use tracing::error;
 
 pub(crate) struct JitoConfig {
     pub(crate) url: String,
@@ -54,7 +55,7 @@ impl JitoThread {
     async fn run(self) {
         loop {
             let Err(err) = self.run_until_err().await;
-            println!("{err:#}");
+            error!(%err, "Jito connection errored");
         }
     }
 
