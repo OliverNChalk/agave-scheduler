@@ -21,11 +21,13 @@ use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
 use solana_fee_structure::FeeBudgetLimits;
+use solana_keypair::Keypair;
 use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
+use crate::batch::jito_thread::{JitoConfig, JitoThread};
 use crate::shared::PriorityId;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
@@ -53,6 +55,14 @@ pub struct BatchScheduler {
 impl BatchScheduler {
     #[must_use]
     pub fn new() -> Self {
+        let (bundle_tx, bundle_rx) = crossbeam_channel::bounded(128);
+        let keypair = Keypair::new();
+        let jito_thread = JitoThread::spawn(
+            bundle_tx,
+            JitoConfig { url: "https://mainnet.block-engine.jito.wtf".to_string() },
+            keypair,
+        );
+
         Self {
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             checked: MinMaxHeap::with_capacity(CHECKED_CAPACITY),

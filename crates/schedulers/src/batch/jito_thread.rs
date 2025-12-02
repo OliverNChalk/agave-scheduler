@@ -13,14 +13,15 @@ use jito_protos::block_engine::{
 };
 use solana_keypair::{Keypair, Signer};
 use tonic::service::Interceptor;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
 
 pub(crate) struct JitoConfig {
-    url: String,
+    pub(crate) url: String,
 }
 
 pub(crate) struct JitoThread {
+    bundle_tx: crossbeam_channel::Sender<()>,
     endpoint: Endpoint,
     keypair: Keypair,
 }
@@ -46,14 +47,14 @@ impl JitoThread {
 
         std::thread::Builder::new()
             .name("Jito".to_string())
-            .spawn(move || rt.block_on(JitoThread { endpoint, keypair }.run()))
+            .spawn(move || rt.block_on(JitoThread { bundle_tx, endpoint, keypair }.run()))
             .unwrap()
     }
 
     async fn run(self) {
         loop {
             let Err(err) = self.run_until_err().await;
-            println!("{err:?}");
+            println!("{err:#}");
         }
     }
 

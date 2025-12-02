@@ -33,7 +33,7 @@ solana-svm-transaction.workspace = true
 solana-transaction.workspace = true
 static_assertions.workspace = true
 tokio = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true, features = ["tls"] }
+tonic = { workspace = true, optional = true, features = ["tls", "tls-roots"] }
 
 [dev-dependencies]
 agave-bridge = { workspace = true, features = ["testing"] }
