@@ -8,6 +8,7 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_data::TransactionData;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use slotmap::SlotMap;
@@ -172,6 +173,10 @@ where
 
     fn tx(&self, key: TransactionId) -> &TransactionState {
         &self.state[key]
+    }
+
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionId, TransactionViewError> {
+        unimplemented!()
     }
 
     fn tx_drop(&mut self, key: TransactionId) {

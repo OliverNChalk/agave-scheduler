@@ -3,9 +3,11 @@ use agave_scheduler_bindings::ProgressMessage;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use solana_fee::FeeFeatures;
 use solana_pubkey::Pubkey;
+use solana_transaction::TransactionError;
 
 pub trait Bridge {
     type Worker: Worker;
@@ -20,6 +22,8 @@ pub trait Bridge {
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
     fn tx(&self, key: TransactionId) -> &TransactionState;
+
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionId, TransactionViewError>;
 
     fn tx_drop(&mut self, key: TransactionId);
 

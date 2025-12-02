@@ -10,6 +10,7 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
@@ -151,6 +152,33 @@ where
 
     fn tx(&self, key: TransactionId) -> &crate::TransactionState {
         &self.state[key]
+    }
+
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionId, TransactionViewError> {
+        assert!(tx.len() <= 1232);
+
+        let ptr = self
+            .allocator
+            .allocate(tx.len().try_into().unwrap())
+            .unwrap();
+        // SAFETY:
+        // - We own this pointer and the size is correct.
+        let tx = unsafe { TransactionPtr::from_raw_parts(ptr, tx.len()) };
+
+        // Sanitize the transaction, drop it immediately if it fails sanitization.
+        match SanitizedTransactionView::try_new_sanitized(tx, true) {
+            Ok(tx) => Ok(self.state.insert(TransactionState { data: tx, keys: None })),
+            Err(err) => {
+                // SAFETY:
+                // - We own `tx` exclusively.
+                // - The previous `TransactionPtr` has been dropped by `try_new_sanitized`.
+                unsafe {
+                    self.allocator.free(ptr);
+                }
+
+                Err(err)
+            }
+        }
     }
 
     fn tx_drop(&mut self, key: TransactionId) {
