@@ -10,13 +10,15 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
+use solana_packet::PACKET_DATA_SIZE;
 
 use crate::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
     TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 
@@ -28,7 +30,7 @@ pub struct SchedulerBindings<M> {
 
     progress: ProgressMessage,
     runtime: RuntimeState,
-    state: SlotMap<TransactionId, TransactionState>,
+    state: SlotMap<TransactionKey, TransactionState>,
     worker_response: Option<WorkerResponsePointers<M>>,
 }
 
@@ -38,11 +40,10 @@ where
 {
     // TODO: Duplicated from scheduling_utils::transaction_ptr.
     const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
-    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionId>();
+    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionKey>();
     const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
     const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
-    #[allow(dead_code, reason = "Invariant assertion")]
-    const TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
+    const _TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
 
     #[must_use]
     pub fn new(
@@ -78,7 +79,7 @@ where
 
     fn collect_batch(
         allocator: &Allocator,
-        state: &SlotMap<TransactionId, TransactionState>,
+        state: &SlotMap<TransactionKey, TransactionState>,
         batch: &[KeyedTransactionMeta<M>],
     ) -> SharableTransactionBatchRegion {
         assert!(batch.len() <= MAX_TRANSACTIONS_PER_MESSAGE);
@@ -149,11 +150,38 @@ where
         &mut self.workers[id]
     }
 
-    fn tx(&self, key: TransactionId) -> &crate::TransactionState {
+    fn tx(&self, key: TransactionKey) -> &crate::TransactionState {
         &self.state[key]
     }
 
-    fn tx_drop(&mut self, key: TransactionId) {
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionKey, TransactionViewError> {
+        assert!(tx.len() <= PACKET_DATA_SIZE);
+
+        let ptr = self
+            .allocator
+            .allocate(tx.len().try_into().unwrap())
+            .unwrap();
+        // SAFETY:
+        // - We own this pointer and the size is correct.
+        let tx = unsafe { TransactionPtr::from_raw_parts(ptr, tx.len()) };
+
+        // Sanitize the transaction, drop it immediately if it fails sanitization.
+        match SanitizedTransactionView::try_new_sanitized(tx, true) {
+            Ok(tx) => Ok(self.state.insert(TransactionState { data: tx, keys: None })),
+            Err(err) => {
+                // SAFETY:
+                // - We own `tx` exclusively.
+                // - The previous `TransactionPtr` has been dropped by `try_new_sanitized`.
+                unsafe {
+                    self.allocator.free(ptr);
+                }
+
+                Err(err)
+            }
+        }
+    }
+
+    fn tx_drop(&mut self, key: TransactionKey) {
         let state = self.state.remove(key).unwrap();
 
         // SAFETY
@@ -179,7 +207,7 @@ where
 
     fn tpu_drain(
         &mut self,
-        mut cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, TransactionKey) -> TxDecision,
         max_count: usize,
     ) {
         self.tpu_to_pack.sync();

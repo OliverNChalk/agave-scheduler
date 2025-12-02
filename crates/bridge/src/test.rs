@@ -8,6 +8,7 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_data::TransactionData;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use slotmap::SlotMap;
@@ -16,20 +17,20 @@ use solana_pubkey::Pubkey;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TransactionState,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
     TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 
 pub struct TestBridge<M> {
     progress_queue: VecDeque<ProgressMessage>,
-    tpu_queue: VecDeque<TransactionId>,
+    tpu_queue: VecDeque<TransactionKey>,
     worker_queues: Vec<VecDeque<(KeyedTransactionMeta<M>, WorkerActionLite)>>,
     workers: Vec<TestWorker>,
     scheduled: VecDeque<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>>,
 
     progress: ProgressMessage,
     runtime: RuntimeState,
-    state: SlotMap<TransactionId, TransactionState>,
+    state: SlotMap<TransactionKey, TransactionState>,
 }
 
 impl<M> TestBridge<M>
@@ -170,11 +171,15 @@ where
         &mut self.workers[id]
     }
 
-    fn tx(&self, key: TransactionId) -> &TransactionState {
+    fn tx(&self, key: TransactionKey) -> &TransactionState {
         &self.state[key]
     }
 
-    fn tx_drop(&mut self, key: TransactionId) {
+    fn tx_insert(&mut self, _: &[u8]) -> Result<TransactionKey, TransactionViewError> {
+        unimplemented!()
+    }
+
+    fn tx_drop(&mut self, key: TransactionKey) {
         self.state.remove(key).unwrap();
     }
 
@@ -192,7 +197,7 @@ where
 
     fn tpu_drain(
         &mut self,
-        mut cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
+        mut cb: impl FnMut(&mut Self, TransactionKey) -> TxDecision,
         max_count: usize,
     ) {
         for _ in 0..max_count {

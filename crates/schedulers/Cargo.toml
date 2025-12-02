@@ -8,23 +8,43 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+batch = [
+  "dep:crossbeam-channel",
+  "dep:eyre",
+  "dep:jito-protos",
+  "dep:solana-keypair",
+  "dep:solana-packet",
+  "dep:tokio",
+  "dep:tonic",
+  "dep:tracing",
+]
+
 [dependencies]
 agave-bridge.workspace = true
 agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 agave-transaction-view.workspace = true
+crossbeam-channel = { workspace = true, optional = true }
+eyre = { workspace = true, optional = true }
 hashbrown.workspace = true
+jito-protos = { workspace = true, optional = true }
 metrics.workspace = true
 min-max-heap.workspace = true
 solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
 solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee-structure.workspace = true
+solana-keypair = { workspace = true, optional = true }
+solana-packet = { workspace = true, optional = true }
 solana-pubkey.workspace = true
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
 solana-svm-transaction.workspace = true
 solana-transaction.workspace = true
 static_assertions.workspace = true
+tokio = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true, features = ["tls", "tls-roots"] }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 agave-bridge = { workspace = true, features = ["testing"] }

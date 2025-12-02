@@ -3,6 +3,7 @@ use agave_scheduler_bindings::ProgressMessage;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use solana_fee::FeeFeatures;
 use solana_pubkey::Pubkey;
@@ -19,9 +20,11 @@ pub trait Bridge {
 
     fn worker(&mut self, id: usize) -> &mut Self::Worker;
 
-    fn tx(&self, key: TransactionId) -> &TransactionState;
+    fn tx(&self, key: TransactionKey) -> &TransactionState;
 
-    fn tx_drop(&mut self, key: TransactionId);
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionKey, TransactionViewError>;
+
+    fn tx_drop(&mut self, key: TransactionKey);
 
     fn drain_progress(&mut self);
 
@@ -29,7 +32,7 @@ pub trait Bridge {
 
     fn tpu_drain(
         &mut self,
-        cb: impl FnMut(&mut Self, TransactionId) -> TxDecision,
+        cb: impl FnMut(&mut Self, TransactionKey) -> TxDecision,
         max_count: usize,
     );
 
@@ -69,7 +72,7 @@ pub trait Worker {
 
 #[derive(Debug, Clone)]
 pub struct WorkerResponse<'a, M> {
-    pub key: TransactionId,
+    pub key: TransactionKey,
     pub meta: M,
     pub response: WorkerAction<'a>,
 }
@@ -83,12 +86,12 @@ pub enum WorkerAction<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyedTransactionMeta<M> {
-    pub key: TransactionId,
+    pub key: TransactionKey,
     pub meta: M,
 }
 
 slotmap::new_key_type! {
-    pub struct TransactionId;
+    pub struct TransactionKey;
 }
 
 #[derive(Debug)]

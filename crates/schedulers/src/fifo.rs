@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use agave_bridge::{
-    Bridge, KeyedTransactionMeta, ScheduleBatch, TransactionId, TxDecision, Worker, WorkerAction,
+    Bridge, KeyedTransactionMeta, ScheduleBatch, TransactionKey, TxDecision, Worker, WorkerAction,
     WorkerResponse,
 };
 use agave_scheduler_bindings::pack_message_flags::check_flags;
@@ -14,8 +14,8 @@ const CHECK_WORKER: usize = 0;
 const EXECUTE_WORKER: usize = 1;
 
 pub struct FifoScheduler {
-    check_queue: VecDeque<TransactionId>,
-    execute_queue: VecDeque<TransactionId>,
+    check_queue: VecDeque<TransactionKey>,
+    execute_queue: VecDeque<TransactionKey>,
     batch: Vec<KeyedTransactionMeta<()>>,
 }
 

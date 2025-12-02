@@ -1,6 +1,6 @@
 use agave_bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionId, TxDecision, Worker,
-    WorkerAction, WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TxDecision, Worker, WorkerAction,
+    WorkerResponse,
 };
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
@@ -23,6 +23,8 @@ use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
+
+use crate::shared::PriorityId;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
@@ -51,7 +53,7 @@ impl GreedyScheduler {
     pub fn new() -> Self {
         Self {
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-            checked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            checked: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
             cu_in_flight: 0,
             schedule_locks: HashMap::default(),
             schedule_batch: Vec::default(),
@@ -418,29 +420,6 @@ impl GreedyMetrics {
             execute_ok: counter!("execute_ok"),
             execute_err: counter!("execute_err"),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct PriorityId {
-    priority: u64,
-    cost: u32,
-    key: TransactionId,
-}
-
-impl PartialOrd for PriorityId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PriorityId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority
-            .cmp(&other.priority)
-            .then_with(|| self.cost.cmp(&other.cost))
-            .then_with(|| self.key.cmp(&other.key))
     }
 }
 

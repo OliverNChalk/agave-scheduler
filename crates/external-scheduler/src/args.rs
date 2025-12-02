@@ -24,6 +24,7 @@ pub(crate) struct Args {
 
 #[derive(Debug, Clone, ValueEnum)]
 pub(crate) enum SchedulerVariant {
+    Batch,
     Fifo,
     Greedy,
 }

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use agave_schedulers::batch::BatchScheduler;
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use futures::StreamExt;
@@ -53,7 +54,11 @@ impl ControlThread {
         );
 
         // Spawn scheduler.
-        let scheduler = match args.scheduler {
+        threads.extend(match args.scheduler {
+            SchedulerVariant::Batch => crate::scheduler_thread::spawn::<BatchScheduler>(
+                shutdown.clone(),
+                args.bindings_ipc,
+            ),
             SchedulerVariant::Fifo => {
                 crate::scheduler_thread::spawn::<FifoScheduler>(shutdown.clone(), args.bindings_ipc)
             }
@@ -61,8 +66,7 @@ impl ControlThread {
                 shutdown.clone(),
                 args.bindings_ipc,
             ),
-        };
-        threads.push(scheduler);
+        });
 
         // Use tokio to listen on all thread exits concurrently.
         let threads = threads
