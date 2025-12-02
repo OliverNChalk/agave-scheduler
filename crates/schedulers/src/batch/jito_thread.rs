@@ -23,6 +23,7 @@ pub(crate) struct JitoConfig {
 }
 
 pub(crate) struct JitoThread {
+    packet_tx: crossbeam_channel::Sender<Vec<u8>>,
     bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
     endpoint: Endpoint,
     keypair: Keypair,
@@ -30,6 +31,7 @@ pub(crate) struct JitoThread {
 
 impl JitoThread {
     pub(crate) fn spawn(
+        packet_tx: crossbeam_channel::Sender<Vec<u8>>,
         bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
         config: JitoConfig,
         keypair: Keypair,
@@ -49,7 +51,9 @@ impl JitoThread {
 
         std::thread::Builder::new()
             .name("Jito".to_string())
-            .spawn(move || rt.block_on(JitoThread { bundle_tx, endpoint, keypair }.run()))
+            .spawn(move || {
+                rt.block_on(JitoThread { packet_tx, bundle_tx, endpoint, keypair }.run());
+            })
             .unwrap()
     }
 
@@ -157,7 +161,14 @@ impl JitoThread {
     }
 
     fn on_packets(&self, packets: SubscribePacketsResponse) {
-        todo!()
+        for packet in packets
+            .batch
+            .into_iter()
+            .flat_map(|batch| batch.packets)
+            .map(|packet| packet.data)
+        {
+            self.packet_tx.try_send(packet).unwrap();
+        }
     }
 }
 

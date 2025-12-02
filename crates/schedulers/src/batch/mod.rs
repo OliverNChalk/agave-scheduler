@@ -46,6 +46,7 @@ const CHECK_WORKER: usize = 0;
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
 pub struct BatchScheduler {
+    packet_rx: crossbeam_channel::Receiver<Vec<u8>>,
     bundle_rx: crossbeam_channel::Receiver<Vec<Vec<u8>>>,
 
     // TODO: Bundles should be sorted against transactions.
@@ -62,9 +63,11 @@ pub struct BatchScheduler {
 impl BatchScheduler {
     #[must_use]
     pub fn new() -> (Self, Vec<JoinHandle<()>>) {
+        let (packet_tx, packet_rx) = crossbeam_channel::bounded(128);
         let (bundle_tx, bundle_rx) = crossbeam_channel::bounded(128);
         let keypair = Keypair::new();
         let jito_thread = JitoThread::spawn(
+            packet_tx,
             bundle_tx,
             JitoConfig { url: "https://mainnet.block-engine.jito.wtf".to_string() },
             keypair,
@@ -72,6 +75,7 @@ impl BatchScheduler {
 
         (
             Self {
+                packet_rx,
                 bundle_rx,
 
                 bundles: VecDeque::new(),
@@ -107,6 +111,9 @@ impl BatchScheduler {
             true => self.drain_tpu(bridge, 128),
             false => self.drain_tpu(bridge, 1024),
         }
+
+        // Drain pending packets.
+        self.drain_packets(bridge);
 
         // Drain pending bundles.
         self.drain_bundles(bridge);
@@ -182,6 +189,26 @@ impl BatchScheduler {
         );
     }
 
+    fn drain_packets<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        while let Ok(packet) = self.packet_rx.try_recv() {
+            if let Ok(key) = bridge.tx_insert(&packet) {
+                match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+                    Some((priority, cost)) => {
+                        self.unchecked_tx.push(PriorityId { priority, cost, key });
+                        // TODO: Metrics.
+                    }
+                    None => {
+                        bridge.tx_drop(key);
+                        // TODO: Metrics.
+                    }
+                }
+            }
+        }
+    }
+
     fn drain_bundles<B>(&mut self, bridge: &mut B)
     where
         B: Bridge<Meta = PriorityId>,
@@ -194,6 +221,7 @@ impl BatchScheduler {
                         bridge.tx_drop(key);
                     }
 
+                    // TODO: Metrics.
                     continue 'outer;
                 };
 
