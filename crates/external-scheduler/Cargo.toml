@@ -12,11 +12,15 @@ workspace = true
 agave-bridge.workspace = true
 agave-schedulers = { workspace = true, features = ["batch"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
+chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }
 metrics-nats-exporter.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 serde_yaml.workspace = true
+solana-clock.workspace = true
+strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }
 toolbox = { workspace = true, features = ["named_task", "shutdown", "tracing", "version"] }
 tracing.workspace = true

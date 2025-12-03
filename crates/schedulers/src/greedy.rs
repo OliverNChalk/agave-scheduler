@@ -15,6 +15,7 @@ use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
+use solana_clock::Slot;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
@@ -24,6 +25,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
+use crate::events::{Event, EventEmitter, SlotEvent};
 use crate::shared::PriorityId;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
@@ -45,12 +47,15 @@ pub struct GreedyScheduler {
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
 
+    events: Option<EventEmitter>,
+    slot: Slot,
+    slot_event: SlotEvent,
     metrics: GreedyMetrics,
 }
 
 impl GreedyScheduler {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(events: Option<EventEmitter>) -> Self {
         Self {
             unchecked: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
             checked: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
@@ -58,6 +63,9 @@ impl GreedyScheduler {
             schedule_locks: HashMap::default(),
             schedule_batch: Vec::default(),
 
+            events,
+            slot: 0,
+            slot_event: SlotEvent::default(),
             metrics: GreedyMetrics::new(),
         }
     }
@@ -66,9 +74,9 @@ impl GreedyScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        // Drain the progress tracker so we know which slot we're on.
+        // Drain the progress tracker & check for roll.
         bridge.drain_progress();
-        let is_leader = bridge.progress().leader_state == IS_LEADER;
+        self.check_slot_roll(bridge);
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
         // expired TXs). If we do this we should use a dense slotmap to make
@@ -78,6 +86,7 @@ impl GreedyScheduler {
         self.drain_worker_responses(bridge);
 
         // Ingest a bounded amount of new transactions.
+        let is_leader = bridge.progress().leader_state == IS_LEADER;
         match is_leader {
             true => self.drain_tpu(bridge, 128),
             false => self.drain_tpu(bridge, 1024),
@@ -101,6 +110,33 @@ impl GreedyScheduler {
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
+    fn check_slot_roll<B>(&mut self, bridge: &B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let progress = bridge.progress();
+        if self.slot == progress.current_slot {
+            return;
+        }
+
+        if let Some(events) = &self.events {
+            // Grab the old slot & state.
+            let event = core::mem::take(&mut self.slot_event);
+
+            // If this is not the 0 slot, publish.
+            if self.slot != 0 {
+                events.emit(Event::Slot(event));
+            }
+
+            // Update context for intraslot events
+            events.ctx().set(progress.current_slot);
+        }
+
+        // Update our local state.
+        self.slot = progress.current_slot;
+        self.slot_event.is_leader = progress.leader_state == IS_LEADER;
+    }
+
     fn drain_worker_responses<B>(&mut self, bridge: &mut B)
     where
         B: Bridge<Meta = PriorityId>,
@@ -108,7 +144,11 @@ impl GreedyScheduler {
         for worker in 0..5 {
             while bridge.pop_worker(worker, |bridge, WorkerResponse { meta, response, .. }| {
                 match response {
-                    WorkerAction::Unprocessed => TxDecision::Keep,
+                    WorkerAction::Unprocessed => {
+                        self.slot_event.worker_unprocessed += 1;
+
+                        TxDecision::Keep
+                    }
                     WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
                     WorkerAction::Execute(rep) => self.on_execute(meta, rep),
                 }
@@ -131,6 +171,7 @@ impl GreedyScheduler {
             bridge.tx_drop(id.key);
         }
         self.metrics.recv_evict.increment(shortfall as u64);
+        self.slot_event.ingest_tpu_evict += shortfall as u64;
 
         // TODO: Need to dedupe already seen transactions?
 
@@ -139,11 +180,13 @@ impl GreedyScheduler {
                 Some((priority, cost)) => {
                     self.unchecked.push(PriorityId { priority, cost, key });
                     self.metrics.recv_ok.increment(1);
+                    self.slot_event.ingest_tpu_ok += 1;
 
                     TxDecision::Keep
                 }
                 None => {
                     self.metrics.recv_err.increment(1);
+                    self.slot_event.ingest_tpu_err += 1;
 
                     TxDecision::Drop
                 }
@@ -181,9 +224,9 @@ impl GreedyScheduler {
         }
 
         // Update metrics with our scheduled amount.
-        self.metrics
-            .check_requested
-            .increment((start_len - self.unchecked.len()) as u64);
+        let requested = (start_len - self.unchecked.len()) as u64;
+        self.metrics.check_requested.increment(requested);
+        self.slot_event.check_requested += requested;
     }
 
     fn schedule_execute<B>(&mut self, bridge: &mut B)
@@ -262,6 +305,7 @@ impl GreedyScheduler {
             self.metrics
                 .execute_requested
                 .increment(self.schedule_batch.len() as u64);
+            self.slot_event.execute_requested += self.schedule_batch.len() as u64;
 
             // Write the next batch for the worker.
             bridge.schedule(ScheduleBatch {
@@ -284,6 +328,7 @@ impl GreedyScheduler {
         let status_failed = rep.status_check_flags & !status_ok != 0;
         if parsing_failed || resolve_failed || status_failed {
             self.metrics.check_err.increment(1);
+            self.slot_event.check_err += 1;
 
             return TxDecision::Drop;
         }
@@ -308,6 +353,7 @@ impl GreedyScheduler {
             bridge.tx_drop(id.key);
 
             self.metrics.check_evict.increment(1);
+            self.slot_event.check_evict += 1;
         }
 
         // Insert the new transaction (yes this may be lower priority then what
@@ -316,6 +362,7 @@ impl GreedyScheduler {
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);
+        self.slot_event.check_ok += 1;
 
         TxDecision::Keep
     }
@@ -326,8 +373,14 @@ impl GreedyScheduler {
 
         // Update metrics.
         match rep.not_included_reason == not_included_reasons::NONE {
-            true => self.metrics.execute_ok.increment(1),
-            false => self.metrics.execute_err.increment(1),
+            true => {
+                self.metrics.execute_ok.increment(1);
+                self.slot_event.execute_ok += 1;
+            }
+            false => {
+                self.metrics.execute_err.increment(1);
+                self.slot_event.execute_err += 1;
+            }
         }
 
         TxDecision::Drop
@@ -448,7 +501,7 @@ mod tests {
     #[test]
     fn check_no_schedule() {
         let mut bridge = TestBridge::new(5, 4);
-        let mut scheduler = GreedyScheduler::new();
+        let mut scheduler = GreedyScheduler::new(None);
 
         // Ingest a simple transfer.
         let from = Keypair::new();
@@ -477,7 +530,7 @@ mod tests {
     #[test]
     fn check_then_schedule() {
         let mut bridge = TestBridge::new(5, 4);
-        let mut scheduler = GreedyScheduler::new();
+        let mut scheduler = GreedyScheduler::new(None);
 
         // Notify the scheduler that node is now leader.
         bridge.queue_progress(ProgressMessage { leader_state: IS_LEADER, ..MOCK_PROGRESS });
@@ -512,7 +565,7 @@ mod tests {
     #[test]
     fn schedule_by_priority_static_non_conflicting() {
         let mut bridge = TestBridge::new(5, 4);
-        let mut scheduler = GreedyScheduler::new();
+        let mut scheduler = GreedyScheduler::new(None);
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();
@@ -556,7 +609,7 @@ mod tests {
     #[test]
     fn schedule_by_priority_static_conflicting() {
         let mut bridge = TestBridge::new(5, 4);
-        let mut scheduler = GreedyScheduler::new();
+        let mut scheduler = GreedyScheduler::new(None);
 
         // Ingest a simple transfer (with low priority).
         let payer = Keypair::new();
@@ -606,7 +659,7 @@ mod tests {
     #[test]
     fn schedule_by_priority_alt_non_conflicting() {
         let mut bridge = TestBridge::new(5, 4);
-        let mut scheduler = GreedyScheduler::new();
+        let mut scheduler = GreedyScheduler::new(None);
         let resolved_pubkeys = vec![Pubkey::new_from_array([1; 32])];
 
         // Ingest a simple transfer (with low priority).
@@ -653,7 +706,7 @@ mod tests {
     #[test]
     fn schedule_by_priority_alt_conflicting() {
         let mut bridge = TestBridge::new(5, 4);
-        let mut scheduler = GreedyScheduler::new();
+        let mut scheduler = GreedyScheduler::new(None);
 
         // Ingest a simple transfer (with low priority).
         let payer0 = Keypair::new();

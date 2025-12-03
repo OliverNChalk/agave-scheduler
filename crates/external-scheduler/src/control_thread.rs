@@ -1,18 +1,21 @@
 use std::time::Duration;
 
 use agave_schedulers::batch::BatchScheduler;
+use agave_schedulers::events::{EventContext, EventEmitter};
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use tokio::runtime::Runtime;
 use tokio::signal::unix::SignalKind;
+use tokio::sync::mpsc;
 use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
 use crate::args::{Args, SchedulerVariant};
 use crate::config::Config;
+use crate::events_thread::EventsThread;
 
 pub(crate) struct ControlThread {
     shutdown: Shutdown,
@@ -46,24 +49,34 @@ impl ControlThread {
                 metrics_nats_exporter::Config {
                     interval_min: Duration::from_millis(50),
                     interval_max: Duration::from_millis(1000),
-                    metric_prefix: Some(format!("metric.greedy-external.{}", config.host_name)),
+                    metric_prefix: Some(format!("metric.scheduler.{}", config.host_name)),
                 },
                 nats_client,
             )
             .unwrap(),
         );
 
+        // Spawn events publisher.
+        let event_ctx = EventContext::leak();
+        let (event_tx, event_rx) = mpsc::channel(1024);
+        let events = EventEmitter::new(event_ctx, event_tx);
+        threads.push(EventsThread::spawn(event_rx, nats_client, &config.host_name));
+
         // Spawn scheduler.
         threads.extend(match args.scheduler {
             SchedulerVariant::Batch => crate::scheduler_thread::spawn::<BatchScheduler>(
                 shutdown.clone(),
+                events,
                 args.bindings_ipc,
             ),
-            SchedulerVariant::Fifo => {
-                crate::scheduler_thread::spawn::<FifoScheduler>(shutdown.clone(), args.bindings_ipc)
-            }
+            SchedulerVariant::Fifo => crate::scheduler_thread::spawn::<FifoScheduler>(
+                shutdown.clone(),
+                events,
+                args.bindings_ipc,
+            ),
             SchedulerVariant::Greedy => crate::scheduler_thread::spawn::<GreedyScheduler>(
                 shutdown.clone(),
+                events,
                 args.bindings_ipc,
             ),
         });

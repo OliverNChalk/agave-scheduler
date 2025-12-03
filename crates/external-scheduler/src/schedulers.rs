@@ -2,6 +2,7 @@ use std::thread::JoinHandle;
 
 use agave_bridge::SchedulerBindings;
 use agave_schedulers::batch::BatchScheduler;
+use agave_schedulers::events::EventEmitter;
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use agave_schedulers::shared::PriorityId;
@@ -12,14 +13,14 @@ where
 {
     type Meta: Copy;
 
-    fn new() -> (Self, Vec<JoinHandle<()>>);
+    fn new(events: EventEmitter) -> (Self, Vec<JoinHandle<()>>);
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>);
 }
 
 impl Scheduler for BatchScheduler {
     type Meta = PriorityId;
 
-    fn new() -> (Self, Vec<JoinHandle<()>>) {
+    fn new(_: EventEmitter) -> (Self, Vec<JoinHandle<()>>) {
         BatchScheduler::new()
     }
 
@@ -31,7 +32,7 @@ impl Scheduler for BatchScheduler {
 impl Scheduler for FifoScheduler {
     type Meta = ();
 
-    fn new() -> (Self, Vec<JoinHandle<()>>) {
+    fn new(_: EventEmitter) -> (Self, Vec<JoinHandle<()>>) {
         (FifoScheduler::new(), vec![])
     }
 
@@ -43,8 +44,8 @@ impl Scheduler for FifoScheduler {
 impl Scheduler for GreedyScheduler {
     type Meta = PriorityId;
 
-    fn new() -> (Self, Vec<JoinHandle<()>>) {
-        (GreedyScheduler::new(), vec![])
+    fn new(events: EventEmitter) -> (Self, Vec<JoinHandle<()>>) {
+        (GreedyScheduler::new(Some(events)), vec![])
     }
 
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>) {
