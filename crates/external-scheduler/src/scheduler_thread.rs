@@ -38,8 +38,6 @@ where
             .unwrap();
             let mut bridge = SchedulerBindings::new(session);
 
-            // TODO: Figure out best way to pass event emitter to the scheduler?
-
             while !shutdown.is_shutdown() {
                 scheduler.poll(&mut bridge);
             }
