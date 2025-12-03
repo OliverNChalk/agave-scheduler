@@ -1,6 +1,7 @@
 mod args;
 mod config;
 mod control_thread;
+mod events_thread;
 mod scheduler_thread;
 mod schedulers;
 

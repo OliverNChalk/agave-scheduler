@@ -3,16 +3,21 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use agave_bridge::SchedulerBindings;
+use agave_schedulers::events::EventEmitter;
 use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client};
 use toolbox::shutdown::Shutdown;
 
 use crate::schedulers::Scheduler;
 
-pub(crate) fn spawn<S>(shutdown: Shutdown, bindings_ipc: PathBuf) -> Vec<JoinHandle<()>>
+pub(crate) fn spawn<S>(
+    shutdown: Shutdown,
+    events: EventEmitter,
+    bindings_ipc: PathBuf,
+) -> Vec<JoinHandle<()>>
 where
     S: Scheduler + Send,
 {
-    let (mut scheduler, mut threads) = S::new();
+    let (mut scheduler, mut threads) = S::new(events);
     let scheduler_thread = std::thread::Builder::new()
         .name("Scheduler".to_string())
         .spawn(move || {
