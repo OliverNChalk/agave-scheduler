@@ -304,6 +304,7 @@ where
                     _ => panic!(),
                 };
 
+                // BUG: index is never incremented and worker_response is never cleared.
                 self.worker_response
                     .insert(WorkerResponsePointers { index: 0, metas, responses })
             }
@@ -373,6 +374,9 @@ where
                 state.data.into_inner_data().free(&self.allocator);
             };
         }
+
+        // BUG: We should be incrementing index & clearing if we have finished the
+        // response here.
 
         true
     }
