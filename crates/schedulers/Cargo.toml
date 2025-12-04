@@ -10,14 +10,20 @@ workspace = true
 
 [features]
 batch = [
+  "dep:bincode",
+  "dep:borsh",
   "dep:crossbeam-channel",
   "dep:eyre",
   "dep:jito-protos",
+  "dep:solana-hash",
   "dep:solana-keypair",
+  "dep:solana-message",
   "dep:solana-packet",
+  "dep:solana-sdk-ids",
   "dep:tokio",
   "dep:tonic",
   "dep:tracing",
+  "solana-pubkey/borsh",
 ]
 
 [dependencies]
@@ -25,6 +31,8 @@ agave-bridge.workspace = true
 agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 agave-transaction-view.workspace = true
+bincode = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["serde"] }
 crossbeam-channel = { workspace = true, optional = true }
 eyre = { workspace = true, optional = true }
@@ -38,10 +46,13 @@ solana-compute-budget-instruction = { workspace = true, features = ["agave-unsta
 solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee = { workspace = true, features = ["agave-unstable-api"] }
 solana-fee-structure.workspace = true
+solana-hash = { workspace = true, optional = true }
 solana-keypair = { workspace = true, optional = true }
+solana-message = { workspace = true, optional = true }
 solana-packet = { workspace = true, optional = true }
 solana-pubkey.workspace = true
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
+solana-sdk-ids = { workspace = true, optional = true }
 solana-svm-transaction.workspace = true
 solana-transaction.workspace = true
 static_assertions.workspace = true

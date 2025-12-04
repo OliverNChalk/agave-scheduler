@@ -40,6 +40,7 @@ agave-schedulers.path = "./crates/schedulers"
 agave-scheduling-utils = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 agave-transaction-view = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 bincode = "1.3.3"
+borsh = "1.6.0"
 chrono = "0.4.42"
 clap = "4.5.51"
 crossbeam-channel = "0.5.15"
@@ -71,6 +72,7 @@ solana-message = "3.0.1"
 solana-packet = "3.0.0"
 solana-pubkey = "3.0.0"
 solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
+solana-sdk-ids = "3.0.0"
 solana-svm-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-system-transaction = "3.0.0"
 solana-transaction = "3.0.1"

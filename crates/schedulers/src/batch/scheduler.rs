@@ -5,7 +5,7 @@ use agave_bridge::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
     WorkerAction, WorkerResponse,
 };
-use agave_scheduler_bindings::pack_message_flags::check_flags;
+use agave_scheduler_bindings::pack_message_flags::{check_flags, execution_flags};
 use agave_scheduler_bindings::worker_message_types::{
     CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
     parsing_and_sanitization_flags, resolve_flags, status_check_flags,
@@ -18,6 +18,8 @@ use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
+use serde::Deserialize;
+use solana_clock::{DEFAULT_SLOTS_PER_EPOCH, Slot};
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
@@ -28,7 +30,11 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::batch::jito_thread::{JitoConfig, JitoThread};
+use crate::batch::jito_thread::{JitoConfig, JitoThread, JitoUpdate};
+use crate::batch::tip_program::{
+    ChangeTipReceiverArgs, TipDistributionConfig, change_tip_receiver, init_tip_distribution,
+};
+use crate::events::{Event, EventEmitter, SlotEvent};
 use crate::shared::PriorityId;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
@@ -43,9 +49,15 @@ const CHECK_WORKER: usize = 0;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
+#[derive(Debug, Deserialize)]
+pub struct BatchConfig {
+    tip: TipDistributionConfig,
+}
+
 pub struct BatchScheduler {
-    packet_rx: crossbeam_channel::Receiver<Vec<u8>>,
-    bundle_rx: crossbeam_channel::Receiver<Vec<Vec<u8>>>,
+    jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
+    config: BatchConfig,
+    keypair: &'static Keypair,
 
     // TODO: Bundles should be sorted against transactions.
     bundles: VecDeque<Vec<TransactionKey>>,
@@ -55,26 +67,31 @@ pub struct BatchScheduler {
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
 
+    events: Option<EventEmitter>,
+    slot: Slot,
+    slot_event: SlotEvent,
     metrics: BatchMetrics,
 }
 
 impl BatchScheduler {
     #[must_use]
-    pub fn new() -> (Self, Vec<JoinHandle<()>>) {
-        let (packet_tx, packet_rx) = crossbeam_channel::bounded(128);
-        let (bundle_tx, bundle_rx) = crossbeam_channel::bounded(128);
-        let keypair = Keypair::new();
+    pub fn new(
+        events: Option<EventEmitter>,
+        config: BatchConfig,
+        keypair: &'static Keypair,
+    ) -> (Self, Vec<JoinHandle<()>>) {
+        let (jito_tx, jito_rx) = crossbeam_channel::bounded(128);
         let jito_thread = JitoThread::spawn(
-            packet_tx,
-            bundle_tx,
+            jito_tx,
             JitoConfig { url: "https://mainnet.block-engine.jito.wtf".to_string() },
             keypair,
         );
 
         (
             Self {
-                packet_rx,
-                bundle_rx,
+                jito_rx,
+                config,
+                keypair,
 
                 bundles: VecDeque::new(),
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
@@ -83,6 +100,9 @@ impl BatchScheduler {
                 schedule_locks: HashMap::new(),
                 schedule_batch: Vec::new(),
 
+                events,
+                slot: 0,
+                slot_event: SlotEvent::default(),
                 metrics: BatchMetrics::new(),
             },
             vec![jito_thread],
@@ -93,9 +113,9 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        // Drain the progress tracker so we know which slot we're on.
+        // Drain the progress tracker & check for roll.
         bridge.drain_progress();
-        let is_leader = bridge.progress().leader_state == IS_LEADER;
+        self.check_slot_roll(bridge);
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
         // expired TXs). If we do this we should use a dense slotmap to make
@@ -105,16 +125,14 @@ impl BatchScheduler {
         self.drain_worker_responses(bridge);
 
         // Ingest a bounded amount of new transactions.
+        let is_leader = bridge.progress().leader_state == IS_LEADER;
         match is_leader {
             true => self.drain_tpu(bridge, 128),
             false => self.drain_tpu(bridge, 1024),
         }
 
-        // Drain pending packets.
-        self.drain_packets(bridge);
-
-        // Drain pending bundles.
-        self.drain_bundles(bridge);
+        // Drain pending jito messages.
+        self.drain_jito(bridge);
 
         // Queue additional checks.
         self.schedule_checks(bridge);
@@ -134,6 +152,82 @@ impl BatchScheduler {
             .set(self.unchecked_tx.len() as f64);
         self.metrics.checked_len.set(self.checked_tx.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
+    }
+
+    fn check_slot_roll<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let was_leader = self.slot_event.is_leader;
+        let progress = bridge.progress();
+        if self.slot == progress.current_slot {
+            return;
+        }
+
+        if let Some(events) = &self.events {
+            // Grab the old slot & state.
+            let event = core::mem::take(&mut self.slot_event);
+
+            // If this is not the 0 slot, publish.
+            if self.slot != 0 {
+                events.emit(Event::Slot(event));
+            }
+
+            // Update context for intraslot events
+            events.ctx().set(progress.current_slot);
+        }
+
+        // Update our local state.
+        self.slot = progress.current_slot;
+        self.slot_event.is_leader = progress.leader_state == IS_LEADER;
+
+        // If we have transitioned to being the leader, we must configure our tip
+        // accounts.
+        if !was_leader && self.slot_event.is_leader {
+            self.become_tip_receiver(bridge);
+        }
+    }
+
+    fn become_tip_receiver<B>(&self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let (tip_distribution_key, init_tip_distribution) = init_tip_distribution(
+            self.keypair,
+            self.config.tip,
+            self.slot / DEFAULT_SLOTS_PER_EPOCH,
+            todo!("recent_blockhash"), // OLI: Jito thread should stream this.
+        );
+        let init_tip_distribution = bridge.tx_insert(&init_tip_distribution).unwrap();
+
+        let change_tip_receiver = change_tip_receiver(
+            self.keypair,
+            ChangeTipReceiverArgs {
+                old_tip_receiver: todo!(), // OLI: Jito thread should stream this.
+                new_tip_receiver: tip_distribution_key,
+                old_block_builder: todo!(), // OLI: Jito thread should stream this.
+                new_block_builder: todo!(), // OLI: Jito thread should stream this.
+                block_builder_commission: todo!(), // OLI: Jito thread should stream this.
+            },
+            todo!("recent_blockhash"),
+        );
+        let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
+
+        bridge.schedule(ScheduleBatch {
+            worker: 1,
+            transactions: &[
+                KeyedTransactionMeta {
+                    key: init_tip_distribution,
+                    meta: PriorityId { priority: u64::MAX, cost: 1, key: init_tip_distribution },
+                },
+                KeyedTransactionMeta {
+                    key: change_tip_receiver,
+                    meta: PriorityId { priority: u64::MAX, cost: 1, key: change_tip_receiver },
+                },
+            ],
+            max_working_slot: self.slot + 4,
+            flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
+        });
     }
 
     fn drain_worker_responses<B>(&mut self, bridge: &mut B)
@@ -187,47 +281,57 @@ impl BatchScheduler {
         );
     }
 
-    fn drain_packets<B>(&mut self, bridge: &mut B)
+    fn drain_jito<B>(&mut self, bridge: &mut B)
     where
         B: Bridge<Meta = PriorityId>,
     {
-        while let Ok(packet) = self.packet_rx.try_recv() {
-            if let Ok(key) = bridge.tx_insert(&packet) {
-                match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
-                    Some((priority, cost)) => {
-                        self.unchecked_tx.push(PriorityId { priority, cost, key });
-                        // TODO: Metrics.
-                    }
-                    None => {
-                        bridge.tx_drop(key);
-                        // TODO: Metrics.
-                    }
+        while let Ok(update) = self.jito_rx.try_recv() {
+            match update {
+                JitoUpdate::TipConfig(config) => todo!(),
+                JitoUpdate::RecentBlockhash(hash) => todo!(),
+                JitoUpdate::Packet(packet) => self.on_packet(bridge, packet),
+                JitoUpdate::Bundle(bundle) => self.on_bundle(bridge, bundle),
+            }
+        }
+    }
+
+    fn on_packet<B>(&mut self, bridge: &mut B, packet: Vec<u8>)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        if let Ok(key) = bridge.tx_insert(&packet) {
+            match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+                Some((priority, cost)) => {
+                    self.unchecked_tx.push(PriorityId { priority, cost, key });
+                    // TODO: Metrics.
+                }
+                None => {
+                    bridge.tx_drop(key);
+                    // TODO: Metrics.
                 }
             }
         }
     }
 
-    fn drain_bundles<B>(&mut self, bridge: &mut B)
+    fn on_bundle<B>(&mut self, bridge: &mut B, bundle: Vec<Vec<u8>>)
     where
         B: Bridge<Meta = PriorityId>,
     {
-        'outer: while let Ok(bundle) = self.bundle_rx.try_recv() {
-            let mut keys = Vec::with_capacity(bundle.len());
-            for packet in bundle {
-                let Ok(key) = bridge.tx_insert(&packet) else {
-                    for key in keys {
-                        bridge.tx_drop(key);
-                    }
+        let mut keys = Vec::with_capacity(bundle.len());
+        for packet in bundle {
+            let Ok(key) = bridge.tx_insert(&packet) else {
+                for key in keys {
+                    bridge.tx_drop(key);
+                }
 
-                    // TODO: Metrics.
-                    continue 'outer;
-                };
+                // TODO: Metrics.
+                return;
+            };
 
-                keys.push(key);
-            }
-
-            self.bundles.push_back(keys);
+            keys.push(key);
         }
+
+        self.bundles.push_back(keys);
     }
 
     fn schedule_checks<B>(&mut self, bridge: &mut B)

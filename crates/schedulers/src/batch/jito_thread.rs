@@ -11,6 +11,7 @@ use jito_protos::block_engine::{
     SubscribeBundlesRequest, SubscribeBundlesResponse, SubscribePacketsRequest,
     SubscribePacketsResponse,
 };
+use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};
 use solana_packet::PACKET_DATA_SIZE;
 use tonic::service::Interceptor;
@@ -23,18 +24,16 @@ pub(crate) struct JitoConfig {
 }
 
 pub(crate) struct JitoThread {
-    packet_tx: crossbeam_channel::Sender<Vec<u8>>,
-    bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
+    update_tx: crossbeam_channel::Sender<JitoUpdate>,
     endpoint: Endpoint,
-    keypair: Keypair,
+    keypair: &'static Keypair,
 }
 
 impl JitoThread {
     pub(crate) fn spawn(
-        packet_tx: crossbeam_channel::Sender<Vec<u8>>,
-        bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
+        update_tx: crossbeam_channel::Sender<JitoUpdate>,
         config: JitoConfig,
-        keypair: Keypair,
+        keypair: &'static Keypair,
     ) -> JoinHandle<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -52,7 +51,7 @@ impl JitoThread {
         std::thread::Builder::new()
             .name("Jito".to_string())
             .spawn(move || {
-                rt.block_on(JitoThread { packet_tx, bundle_tx, endpoint, keypair }.run());
+                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run());
             })
             .unwrap()
     }
@@ -156,7 +155,7 @@ impl JitoThread {
             })
             .filter(|bundle| !bundle.is_empty())
         {
-            self.bundle_tx.try_send(bundle).unwrap();
+            self.update_tx.try_send(JitoUpdate::Bundle(bundle)).unwrap();
         }
     }
 
@@ -167,10 +166,19 @@ impl JitoThread {
             .flat_map(|batch| batch.packets)
             .map(|packet| packet.data)
         {
-            self.packet_tx.try_send(packet).unwrap();
+            self.update_tx.try_send(JitoUpdate::Packet(packet)).unwrap();
         }
     }
 }
+
+pub(crate) enum JitoUpdate {
+    TipConfig(TipConfig),
+    RecentBlockhash(Hash),
+    Packet(Vec<u8>),
+    Bundle(Vec<Vec<u8>>),
+}
+
+pub(crate) struct TipConfig {}
 
 struct AuthInterceptor {
     access: Arc<Mutex<Token>>,
