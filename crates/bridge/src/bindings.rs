@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
@@ -304,9 +305,12 @@ where
                     _ => panic!(),
                 };
 
-                // BUG: index is never incremented and worker_response is never cleared.
-                self.worker_response
-                    .insert(WorkerResponsePointers { index: 0, metas, responses })
+                self.worker_response.insert(WorkerResponsePointers {
+                    index: 0,
+                    len: usize::from(rep.batch.num_transactions),
+                    metas,
+                    responses,
+                })
             }
         };
 
@@ -375,8 +379,14 @@ where
             };
         }
 
-        // BUG: We should be incrementing index & clearing if we have finished the
-        // response here.
+        // Increment the index & clear if we have exhausted all responses.
+        let ptrs = self.worker_response.as_mut().unwrap();
+        ptrs.index += 1;
+        match ptrs.index.cmp(&ptrs.len) {
+            Ordering::Greater => unreachable!(),
+            Ordering::Equal => self.worker_response = None,
+            Ordering::Less => {}
+        }
 
         true
     }
@@ -419,6 +429,7 @@ impl Worker for SchedulerWorker {
 
 struct WorkerResponsePointers<M> {
     index: usize,
+    len: usize,
     metas: NonNull<KeyedTransactionMeta<M>>,
     responses: WorkerResponseBatch,
 }
