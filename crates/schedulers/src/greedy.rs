@@ -207,11 +207,14 @@ impl GreedyScheduler {
             }
 
             self.schedule_batch.clear();
-            self.schedule_batch.extend(std::iter::from_fn(|| {
-                self.unchecked
-                    .pop_max()
-                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
-            }));
+            self.schedule_batch.extend(
+                std::iter::from_fn(|| {
+                    self.unchecked
+                        .pop_max()
+                        .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
+                })
+                .take(MAX_TRANSACTIONS_PER_MESSAGE),
+            );
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
                 transactions: &self.schedule_batch,
@@ -294,7 +297,8 @@ impl GreedyScheduler {
             };
 
             self.schedule_batch.clear();
-            self.schedule_batch.extend(std::iter::from_fn(pop_next));
+            self.schedule_batch
+                .extend(std::iter::from_fn(pop_next).take(MAX_TRANSACTIONS_PER_MESSAGE));
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {
