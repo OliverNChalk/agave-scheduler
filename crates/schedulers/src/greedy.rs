@@ -26,7 +26,7 @@ use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
 use crate::events::{Event, EventEmitter, SlotEvent};
-use crate::shared::PriorityId;
+use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
@@ -213,7 +213,7 @@ impl GreedyScheduler {
                         .pop_max()
                         .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
                 })
-                .take(MAX_TRANSACTIONS_PER_MESSAGE),
+                .take(TARGET_BATCH_SIZE),
             );
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
@@ -298,7 +298,7 @@ impl GreedyScheduler {
 
             self.schedule_batch.clear();
             self.schedule_batch
-                .extend(std::iter::from_fn(pop_next).take(MAX_TRANSACTIONS_PER_MESSAGE));
+                .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {
