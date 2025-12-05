@@ -106,7 +106,6 @@ where
 
         // Fill in the batch with transaction pointers.
         for (i, meta) in batch.iter().copied().enumerate() {
-            println!("GET FOR BATCH: {:?}", meta.key);
             let tx = &state[meta.key];
 
             // SAFETY
@@ -154,7 +153,6 @@ where
     }
 
     fn tx(&self, key: TransactionKey) -> &crate::TransactionState {
-        println!("TX: {key:?}");
         &self.state[key]
     }
 
@@ -183,11 +181,9 @@ where
                 Err(err)
             }
         }
-        .inspect(|key| println!("INSERT: {key:?}"))
     }
 
     fn tx_drop(&mut self, key: TransactionKey) {
-        println!("REMOVE: {key:?}");
         let state = self.state.remove(key).unwrap();
 
         // SAFETY
@@ -246,11 +242,9 @@ where
 
             // Get the ID so the caller can store it for later use.
             let key = self.state.insert(TransactionState { data: tx, keys: None });
-            println!("INSERT: {key:?}");
 
             // Remove & free the TX if the scheduler doesn't want it.
             if cb(self, key) == TxDecision::Drop {
-                println!("DRAIN DROP: {key:?}");
                 let state = self.state.remove(key).unwrap();
                 // SAFETY:
                 // - We own `tx` exclusively.
@@ -353,7 +347,6 @@ where
                 );
 
                 // Store the keys on state.
-                println!("ADD KEYS: {key:?}");
                 self.state[key].keys = keys;
 
                 decision
@@ -362,7 +355,6 @@ where
 
         // Remove the tx from state & drop the allocation if requested.
         if decision == TxDecision::Drop {
-            println!("DROP: {key:?}");
             let state = self.state.remove(key).unwrap();
 
             if let Some(keys) = state.keys {
