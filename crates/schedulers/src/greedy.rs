@@ -116,13 +116,14 @@ impl GreedyScheduler {
     {
         let progress = bridge.progress();
         if self.slot == progress.current_slot {
+            self.slot_event.is_leader |= progress.leader_state == IS_LEADER;
+
             return;
         }
 
+        // Grab & reset the event state.
+        let event = core::mem::take(&mut self.slot_event);
         if let Some(events) = &self.events {
-            // Grab the old slot & state.
-            let event = core::mem::take(&mut self.slot_event);
-
             // If this is not the 0 slot, publish.
             if self.slot != 0 {
                 events.emit(Event::Slot(event));
@@ -134,7 +135,6 @@ impl GreedyScheduler {
 
         // Update our local state.
         self.slot = progress.current_slot;
-        self.slot_event.is_leader = progress.leader_state == IS_LEADER;
     }
 
     fn drain_worker_responses<B>(&mut self, bridge: &mut B)
