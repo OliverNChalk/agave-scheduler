@@ -9,11 +9,22 @@
       ...
     }:
     let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-darwin"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     in
     {
       # Dev.
-      devShells.${system}.default = pkgs.mkShell { };
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          default = pkgs.mkShell { };
+        }
+      );
     };
 }

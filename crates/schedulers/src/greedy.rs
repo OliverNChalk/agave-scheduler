@@ -26,7 +26,7 @@ use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
 use crate::events::{Event, EventEmitter, SlotEvent};
-use crate::shared::PriorityId;
+use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
@@ -116,13 +116,14 @@ impl GreedyScheduler {
     {
         let progress = bridge.progress();
         if self.slot == progress.current_slot {
+            self.slot_event.is_leader |= progress.leader_state == IS_LEADER;
+
             return;
         }
 
+        // Grab & reset the event state.
+        let event = core::mem::take(&mut self.slot_event);
         if let Some(events) = &self.events {
-            // Grab the old slot & state.
-            let event = core::mem::take(&mut self.slot_event);
-
             // If this is not the 0 slot, publish.
             if self.slot != 0 {
                 events.emit(Event::Slot(event));
@@ -134,7 +135,6 @@ impl GreedyScheduler {
 
         // Update our local state.
         self.slot = progress.current_slot;
-        self.slot_event.is_leader = progress.leader_state == IS_LEADER;
     }
 
     fn drain_worker_responses<B>(&mut self, bridge: &mut B)
@@ -207,11 +207,14 @@ impl GreedyScheduler {
             }
 
             self.schedule_batch.clear();
-            self.schedule_batch.extend(std::iter::from_fn(|| {
-                self.unchecked
-                    .pop_max()
-                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
-            }));
+            self.schedule_batch.extend(
+                std::iter::from_fn(|| {
+                    self.unchecked
+                        .pop_max()
+                        .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
+                })
+                .take(TARGET_BATCH_SIZE),
+            );
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
                 transactions: &self.schedule_batch,
@@ -294,7 +297,8 @@ impl GreedyScheduler {
             };
 
             self.schedule_batch.clear();
-            self.schedule_batch.extend(std::iter::from_fn(pop_next));
+            self.schedule_batch
+                .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {

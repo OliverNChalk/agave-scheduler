@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
@@ -40,7 +41,8 @@ where
 {
     // TODO: Duplicated from scheduling_utils::transaction_ptr.
     const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
-    const TX_TOTAL_SIZE: usize = Self::TX_CORE_SIZE + std::mem::size_of::<TransactionKey>();
+    const TX_TOTAL_SIZE: usize =
+        Self::TX_CORE_SIZE + std::mem::size_of::<KeyedTransactionMeta<M>>();
     const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
     const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
     const _TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
@@ -239,11 +241,11 @@ where
             };
 
             // Get the ID so the caller can store it for later use.
-            let id = self.state.insert(TransactionState { data: tx, keys: None });
+            let key = self.state.insert(TransactionState { data: tx, keys: None });
 
             // Remove & free the TX if the scheduler doesn't want it.
-            if cb(self, id) == TxDecision::Drop {
-                let state = self.state.remove(id).unwrap();
+            if cb(self, key) == TxDecision::Drop {
+                let state = self.state.remove(key).unwrap();
                 // SAFETY:
                 // - We own `tx` exclusively.
                 unsafe { state.data.into_inner_data().free(&self.allocator) };
@@ -298,8 +300,12 @@ where
                     _ => panic!(),
                 };
 
-                self.worker_response
-                    .insert(WorkerResponsePointers { index: 0, metas, responses })
+                self.worker_response.insert(WorkerResponsePointers {
+                    index: 0,
+                    len: usize::from(rep.batch.num_transactions),
+                    metas,
+                    responses,
+                })
             }
         };
 
@@ -366,6 +372,15 @@ where
             };
         }
 
+        // Increment the index & clear if we have exhausted all responses.
+        let ptrs = self.worker_response.as_mut().unwrap();
+        ptrs.index += 1;
+        match ptrs.index.cmp(&ptrs.len) {
+            Ordering::Greater => unreachable!(),
+            Ordering::Equal => self.worker_response = None,
+            Ordering::Less => {}
+        }
+
         true
     }
 
@@ -407,6 +422,7 @@ impl Worker for SchedulerWorker {
 
 struct WorkerResponsePointers<M> {
     index: usize,
+    len: usize,
     metas: NonNull<KeyedTransactionMeta<M>>,
     responses: WorkerResponseBatch,
 }
