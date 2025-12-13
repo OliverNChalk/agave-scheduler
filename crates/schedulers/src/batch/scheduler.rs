@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use agave_bridge::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
@@ -31,7 +32,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::batch::jito_thread::{JitoConfig, JitoThread, JitoUpdate, TipConfig};
+use crate::batch::jito_thread::{BuilderConfig, JitoConfig, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
     ChangeTipReceiverArgs, TipDistributionConfig, change_tip_receiver, init_tip_distribution,
 };
@@ -60,6 +61,7 @@ pub struct BatchScheduler {
     config: BatchConfig,
     keypair: &'static Keypair,
 
+    builder_config: BuilderConfig,
     tip_config: Option<TipConfig>,
     recent_blockhash: Hash,
     // TODO: Bundles should be sorted against transactions.
@@ -90,12 +92,19 @@ impl BatchScheduler {
             keypair,
         );
 
+        let JitoUpdate::BuilderConfig(builder_config) =
+            jito_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!();
+        };
+
         (
             Self {
                 jito_rx,
                 config,
                 keypair,
 
+                builder_config,
                 tip_config: None,
                 recent_blockhash: Hash::default(),
                 bundles: VecDeque::new(),
@@ -293,6 +302,7 @@ impl BatchScheduler {
     {
         while let Ok(update) = self.jito_rx.try_recv() {
             match update {
+                JitoUpdate::BuilderConfig { .. } => unreachable!(),
                 JitoUpdate::TipConfig(config) => self.tip_config = Some(config),
                 JitoUpdate::RecentBlockhash(hash) => self.recent_blockhash = hash,
                 JitoUpdate::Packet(packet) => self.on_packet(bridge, packet),

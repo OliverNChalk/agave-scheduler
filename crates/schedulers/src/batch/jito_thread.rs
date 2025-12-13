@@ -9,8 +9,8 @@ use jito_protos::auth::auth_service_client::AuthServiceClient;
 use jito_protos::auth::{GenerateAuthChallengeRequest, GenerateAuthTokensRequest, Role, Token};
 use jito_protos::block_engine::block_engine_validator_client::BlockEngineValidatorClient;
 use jito_protos::block_engine::{
-    SubscribeBundlesRequest, SubscribeBundlesResponse, SubscribePacketsRequest,
-    SubscribePacketsResponse,
+    BlockBuilderFeeInfoRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
+    SubscribePacketsRequest, SubscribePacketsResponse,
 };
 use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};
@@ -113,6 +113,18 @@ impl JitoThread {
             AuthInterceptor { access: access.clone() },
         );
 
+        // Fetch block builder config (for now we don't refresh).
+        let block_builder_info = block_engine
+            .get_block_builder_fee_info(BlockBuilderFeeInfoRequest {})
+            .await?
+            .into_inner();
+        self.update_tx
+            .try_send(JitoUpdate::BuilderConfig(BuilderConfig {
+                key: block_builder_info.pubkey.parse().unwrap(),
+                commission: block_builder_info.commission,
+            }))
+            .unwrap();
+
         // Start the bundle & packet streams.
         let mut bundles = block_engine
             .subscribe_bundles(SubscribeBundlesRequest {})
@@ -174,10 +186,16 @@ impl JitoThread {
 }
 
 pub(crate) enum JitoUpdate {
+    BuilderConfig(BuilderConfig),
     TipConfig(TipConfig),
     RecentBlockhash(Hash),
     Packet(Vec<u8>),
     Bundle(Vec<Vec<u8>>),
+}
+
+pub(crate) struct BuilderConfig {
+    pub(crate) key: Pubkey,
+    pub(crate) commission: u64,
 }
 
 #[derive(Debug, BorshDeserialize)]
