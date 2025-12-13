@@ -54,11 +54,12 @@ const BLOCK_FILL_CUTOFF: u8 = 20;
 #[derive(Debug, Deserialize)]
 pub struct BatchConfig {
     tip: TipDistributionConfig,
+    jito: JitoConfig,
 }
 
 pub struct BatchScheduler {
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
-    config: BatchConfig,
+    tip_distribution_config: TipDistributionConfig,
     keypair: &'static Keypair,
 
     builder_config: BuilderConfig,
@@ -86,11 +87,7 @@ impl BatchScheduler {
         keypair: &'static Keypair,
     ) -> (Self, Vec<JoinHandle<()>>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(128);
-        let jito_thread = JitoThread::spawn(
-            jito_tx,
-            JitoConfig { url: "https://mainnet.block-engine.jito.wtf".to_string() },
-            keypair,
-        );
+        let jito_thread = JitoThread::spawn(jito_tx, config.jito, keypair);
 
         let JitoUpdate::BuilderConfig(builder_config) =
             jito_rx.recv_timeout(Duration::from_secs(5)).unwrap()
@@ -101,7 +98,7 @@ impl BatchScheduler {
         (
             Self {
                 jito_rx,
-                config,
+                tip_distribution_config: config.tip,
                 keypair,
 
                 builder_config,
@@ -208,7 +205,7 @@ impl BatchScheduler {
     {
         let (tip_distribution_key, init_tip_distribution) = init_tip_distribution(
             self.keypair,
-            self.config.tip,
+            self.tip_distribution_config,
             self.slot / DEFAULT_SLOTS_PER_EPOCH,
             self.recent_blockhash,
         );

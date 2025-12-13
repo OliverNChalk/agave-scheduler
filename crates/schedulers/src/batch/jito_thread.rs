@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use borsh::BorshDeserialize;
 use eyre::eyre;
+use futures::StreamExt;
 use jito_protos::auth::auth_service_client::AuthServiceClient;
 use jito_protos::auth::{GenerateAuthChallengeRequest, GenerateAuthTokensRequest, Role, Token};
 use jito_protos::block_engine::block_engine_validator_client::BlockEngineValidatorClient;
@@ -12,16 +12,24 @@ use jito_protos::block_engine::{
     BlockBuilderFeeInfoRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
     SubscribePacketsRequest, SubscribePacketsResponse,
 };
+use serde::Deserialize;
 use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};
 use solana_packet::PACKET_DATA_SIZE;
 use solana_pubkey::Pubkey;
+use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
+use solana_rpc_client_types::config::{CommitmentConfig, RpcAccountInfoConfig, UiAccountEncoding};
+use solana_rpc_client_types::response::UiAccount;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
 use tracing::error;
 
+use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct JitoConfig {
+    pub(crate) ws_rpc: String,
     pub(crate) url: String,
 }
 
@@ -41,6 +49,7 @@ impl JitoThread {
             .enable_all()
             .build()
             .unwrap();
+
         // Setup the block engine endpoint.
         let enable_tls = config.url.starts_with("https");
         let mut endpoint = Endpoint::from_shared(config.url)
@@ -53,19 +62,19 @@ impl JitoThread {
         std::thread::Builder::new()
             .name("Jito".to_string())
             .spawn(move || {
-                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run());
+                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run(&config.ws_rpc));
             })
             .unwrap()
     }
 
-    async fn run(self) {
+    async fn run(self, ws: &str) {
         loop {
-            let Err(err) = self.run_until_err().await;
+            let Err(err) = self.run_until_err(ws).await;
             error!(%err, "Jito connection errored");
         }
     }
 
-    async fn run_until_err(&self) -> eyre::Result<Infallible> {
+    async fn run_until_err(&self, ws: &str) -> eyre::Result<Infallible> {
         // Connect to the auth service.
         let auth = self.endpoint.connect().await?;
         let mut auth = AuthServiceClient::new(auth);
@@ -135,11 +144,30 @@ impl JitoThread {
             .await?
             .into_inner();
 
+        // Start jito tip config stream.
+        let ws = PubsubClient::new(ws).await?;
+        let (mut tip_config, _) = ws
+            .account_subscribe(
+                &TIP_PAYMENT_CONFIG,
+                Some(RpcAccountInfoConfig {
+                    encoding: Some(UiAccountEncoding::Base64),
+                    data_slice: None,
+                    commitment: Some(CommitmentConfig::processed()),
+                    min_context_slot: None,
+                }),
+            )
+            .await?;
+
         // Consume bundles & packets until error.
         loop {
             tokio::select! {
                 biased;
 
+                opt = tip_config.next() => {
+                    let config = opt.ok_or_else(|| eyre!("tip config stream closed"))?.value;
+
+                    self.on_tip_config(&config);
+                }
                 res = bundles.message() => {
                     let bundles = res?.ok_or_else(|| eyre!("bundle stream closed"))?;
 
@@ -152,6 +180,17 @@ impl JitoThread {
                 },
             }
         }
+    }
+
+    fn on_tip_config(&self, config: &UiAccount) {
+        let data = config.data.decode().unwrap();
+
+        let tip_receiver = Pubkey::new_from_array(*arrayref::array_ref![&data, 8, 32]);
+        let block_builder = Pubkey::new_from_array(*arrayref::array_ref![&data, 40, 32]);
+
+        self.update_tx
+            .try_send(JitoUpdate::TipConfig(TipConfig { tip_receiver, block_builder }))
+            .unwrap();
     }
 
     fn on_bundles(&self, bundles: SubscribeBundlesResponse) {
@@ -198,9 +237,8 @@ pub(crate) struct BuilderConfig {
     pub(crate) commission: u64,
 }
 
-#[derive(Debug, BorshDeserialize)]
+#[derive(Debug)]
 pub(crate) struct TipConfig {
-    pub(crate) discriminator: [u8; 8],
     pub(crate) tip_receiver: Pubkey,
     pub(crate) block_builder: Pubkey,
 }

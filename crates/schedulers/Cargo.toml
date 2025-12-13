@@ -10,15 +10,19 @@ workspace = true
 
 [features]
 batch = [
+  "dep:arrayref",
   "dep:bincode",
   "dep:borsh",
   "dep:crossbeam-channel",
   "dep:eyre",
+  "dep:futures",
   "dep:jito-protos",
+  "dep:solana-pubsub-client",
   "dep:solana-hash",
   "dep:solana-keypair",
   "dep:solana-message",
   "dep:solana-packet",
+  "dep:solana-rpc-client-types",
   "dep:solana-sdk-ids",
   "dep:tokio",
   "dep:tonic",
@@ -31,11 +35,13 @@ agave-bridge.workspace = true
 agave-scheduler-bindings = { workspace = true, features = ["dev-context-only-utils"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 agave-transaction-view.workspace = true
+arrayref = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["serde"] }
 crossbeam-channel = { workspace = true, optional = true }
 eyre = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 hashbrown.workspace = true
 jito-protos = { workspace = true, optional = true }
 metrics.workspace = true
@@ -51,6 +57,8 @@ solana-keypair = { workspace = true, optional = true }
 solana-message = { workspace = true, optional = true }
 solana-packet = { workspace = true, optional = true }
 solana-pubkey.workspace = true
+solana-pubsub-client = { workspace = true, optional = true }
+solana-rpc-client-types = { workspace = true, optional = true }
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
 solana-sdk-ids = { workspace = true, optional = true }
 solana-svm-transaction.workspace = true

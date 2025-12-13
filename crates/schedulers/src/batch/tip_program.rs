@@ -9,7 +9,7 @@ use solana_transaction::Transaction;
 use solana_transaction::versioned::VersionedTransaction;
 
 const TIP_PAYMENT_PROGRAM: Pubkey = pubkey!("T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt");
-const TIP_PAYMENT_CONFIG: Pubkey = pubkey!("HgzT81VF1xZ3FT9Eq1pHhea7Wcfq2bv4tWTP3VvJ8Y9D");
+pub(crate) const TIP_PAYMENT_CONFIG: Pubkey = pubkey!("HgzT81VF1xZ3FT9Eq1pHhea7Wcfq2bv4tWTP3VvJ8Y9D");
 const TIP_PAYMENT_ACCOUNT_0: Pubkey = pubkey!("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5");
 const TIP_PAYMENT_ACCOUNT_1: Pubkey = pubkey!("HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe");
 const TIP_PAYMENT_ACCOUNT_2: Pubkey = pubkey!("Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY");
