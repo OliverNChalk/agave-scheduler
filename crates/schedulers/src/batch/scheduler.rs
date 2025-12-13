@@ -210,7 +210,7 @@ impl BatchScheduler {
             self.keypair,
             self.config.tip,
             self.slot / DEFAULT_SLOTS_PER_EPOCH,
-            todo!("recent_blockhash"), // OLI: Jito thread should stream this.
+            self.recent_blockhash,
         );
         let init_tip_distribution = bridge.tx_insert(&init_tip_distribution).unwrap();
 
@@ -221,10 +221,10 @@ impl BatchScheduler {
                 old_tip_receiver: tip_config.tip_receiver,
                 new_tip_receiver: tip_distribution_key,
                 old_block_builder: tip_config.block_builder,
-                new_block_builder: todo!(), // OLI: Jito thread should stream this.
-                block_builder_commission: todo!(), // OLI: Jito thread should stream this.
+                new_block_builder: self.builder_config.key,
+                block_builder_commission: self.builder_config.commission,
             },
-            todo!("recent_blockhash"),
+            self.recent_blockhash,
         );
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
@@ -305,17 +305,17 @@ impl BatchScheduler {
                 JitoUpdate::BuilderConfig { .. } => unreachable!(),
                 JitoUpdate::TipConfig(config) => self.tip_config = Some(config),
                 JitoUpdate::RecentBlockhash(hash) => self.recent_blockhash = hash,
-                JitoUpdate::Packet(packet) => self.on_packet(bridge, packet),
+                JitoUpdate::Packet(packet) => self.on_packet(bridge, &packet),
                 JitoUpdate::Bundle(bundle) => self.on_bundle(bridge, bundle),
             }
         }
     }
 
-    fn on_packet<B>(&mut self, bridge: &mut B, packet: Vec<u8>)
+    fn on_packet<B>(&mut self, bridge: &mut B, packet: &[u8])
     where
         B: Bridge<Meta = PriorityId>,
     {
-        if let Ok(key) = bridge.tx_insert(&packet) {
+        if let Ok(key) = bridge.tx_insert(packet) {
             match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
