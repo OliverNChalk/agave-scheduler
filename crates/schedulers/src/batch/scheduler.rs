@@ -24,13 +24,14 @@ use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
 use solana_fee_structure::FeeBudgetLimits;
+use solana_hash::Hash;
 use solana_keypair::Keypair;
 use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::batch::jito_thread::{JitoConfig, JitoThread, JitoUpdate};
+use crate::batch::jito_thread::{JitoConfig, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
     ChangeTipReceiverArgs, TipDistributionConfig, change_tip_receiver, init_tip_distribution,
 };
@@ -59,6 +60,8 @@ pub struct BatchScheduler {
     config: BatchConfig,
     keypair: &'static Keypair,
 
+    tip_config: Option<TipConfig>,
+    recent_blockhash: Hash,
     // TODO: Bundles should be sorted against transactions.
     bundles: VecDeque<Vec<TransactionKey>>,
     unchecked_tx: MinMaxHeap<PriorityId>,
@@ -93,6 +96,8 @@ impl BatchScheduler {
                 config,
                 keypair,
 
+                tip_config: None,
+                recent_blockhash: Hash::default(),
                 bundles: VecDeque::new(),
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked_tx: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
@@ -200,12 +205,13 @@ impl BatchScheduler {
         );
         let init_tip_distribution = bridge.tx_insert(&init_tip_distribution).unwrap();
 
+        let tip_config = self.tip_config.as_ref().unwrap();
         let change_tip_receiver = change_tip_receiver(
             self.keypair,
             ChangeTipReceiverArgs {
-                old_tip_receiver: todo!(), // OLI: Jito thread should stream this.
+                old_tip_receiver: tip_config.tip_receiver,
                 new_tip_receiver: tip_distribution_key,
-                old_block_builder: todo!(), // OLI: Jito thread should stream this.
+                old_block_builder: tip_config.block_builder,
                 new_block_builder: todo!(), // OLI: Jito thread should stream this.
                 block_builder_commission: todo!(), // OLI: Jito thread should stream this.
             },
@@ -287,8 +293,8 @@ impl BatchScheduler {
     {
         while let Ok(update) = self.jito_rx.try_recv() {
             match update {
-                JitoUpdate::TipConfig(config) => todo!(),
-                JitoUpdate::RecentBlockhash(hash) => todo!(),
+                JitoUpdate::TipConfig(config) => self.tip_config = Some(config),
+                JitoUpdate::RecentBlockhash(hash) => self.recent_blockhash = hash,
                 JitoUpdate::Packet(packet) => self.on_packet(bridge, packet),
                 JitoUpdate::Bundle(bundle) => self.on_bundle(bridge, bundle),
             }

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use borsh::BorshDeserialize;
 use eyre::eyre;
 use jito_protos::auth::auth_service_client::AuthServiceClient;
 use jito_protos::auth::{GenerateAuthChallengeRequest, GenerateAuthTokensRequest, Role, Token};
@@ -14,6 +15,7 @@ use jito_protos::block_engine::{
 use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};
 use solana_packet::PACKET_DATA_SIZE;
+use solana_pubkey::Pubkey;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
@@ -178,7 +180,12 @@ pub(crate) enum JitoUpdate {
     Bundle(Vec<Vec<u8>>),
 }
 
-pub(crate) struct TipConfig {}
+#[derive(Debug, BorshDeserialize)]
+pub(crate) struct TipConfig {
+    pub(crate) discriminator: [u8; 8],
+    pub(crate) tip_receiver: Pubkey,
+    pub(crate) block_builder: Pubkey,
+}
 
 struct AuthInterceptor {
     access: Arc<Mutex<Token>>,
