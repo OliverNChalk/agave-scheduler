@@ -23,9 +23,11 @@ batch = [
   "dep:solana-message",
   "dep:solana-packet",
   "dep:solana-rpc-client-types",
+  "dep:solana-rpc-client",
   "dep:solana-sdk-ids",
   "dep:tokio",
   "dep:tonic",
+  "dep:toolbox",
   "dep:tracing",
   "solana-pubkey/borsh",
 ]
@@ -58,6 +60,7 @@ solana-message = { workspace = true, optional = true }
 solana-packet = { workspace = true, optional = true }
 solana-pubkey.workspace = true
 solana-pubsub-client = { workspace = true, optional = true }
+solana-rpc-client = { workspace = true, optional = true }
 solana-rpc-client-types = { workspace = true, optional = true }
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
 solana-sdk-ids = { workspace = true, optional = true }
@@ -67,6 +70,7 @@ static_assertions.workspace = true
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true, features = ["tls", "tls-roots"] }
+toolbox = { workspace = true, optional = true, features = ["interval_stream"] }
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]

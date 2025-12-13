@@ -73,6 +73,7 @@ solana-message = "3.0.1"
 solana-packet = "3.0.0"
 solana-pubkey = "3.0.0"
 solana-pubsub-client = "3.0.0"
+solana-rpc-client = "3.0.0"
 solana-rpc-client-types = "3.0.0"
 solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-sdk-ids = "3.0.0"

@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use eyre::eyre;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use jito_protos::auth::auth_service_client::AuthServiceClient;
 use jito_protos::auth::{GenerateAuthChallengeRequest, GenerateAuthTokensRequest, Role, Token};
 use jito_protos::block_engine::block_engine_validator_client::BlockEngineValidatorClient;
@@ -18,17 +18,20 @@ use solana_keypair::{Keypair, Signer};
 use solana_packet::PACKET_DATA_SIZE;
 use solana_pubkey::Pubkey;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_types::config::{CommitmentConfig, RpcAccountInfoConfig, UiAccountEncoding};
 use solana_rpc_client_types::response::UiAccount;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
+use toolbox::tokio::IntervalStream;
 use tracing::error;
 
 use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct JitoConfig {
+    pub(crate) http_rpc: String,
     pub(crate) ws_rpc: String,
     pub(crate) url: String,
 }
@@ -50,6 +53,8 @@ impl JitoThread {
             .build()
             .unwrap();
 
+        let rpc = Box::leak(Box::new(RpcClient::new(config.http_rpc)));
+
         // Setup the block engine endpoint.
         let enable_tls = config.url.starts_with("https");
         let mut endpoint = Endpoint::from_shared(config.url)
@@ -62,19 +67,19 @@ impl JitoThread {
         std::thread::Builder::new()
             .name("Jito".to_string())
             .spawn(move || {
-                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run(&config.ws_rpc));
+                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc));
             })
             .unwrap()
     }
 
-    async fn run(self, ws: &str) {
+    async fn run(self, rpc: &'static RpcClient, ws: &str) {
         loop {
-            let Err(err) = self.run_until_err(ws).await;
+            let Err(err) = self.run_until_err(rpc, ws).await;
             error!(%err, "Jito connection errored");
         }
     }
 
-    async fn run_until_err(&self, ws: &str) -> eyre::Result<Infallible> {
+    async fn run_until_err(&self, rpc: &'static RpcClient, ws: &str) -> eyre::Result<Infallible> {
         // Connect to the auth service.
         let auth = self.endpoint.connect().await?;
         let mut auth = AuthServiceClient::new(auth);
@@ -144,6 +149,18 @@ impl JitoThread {
             .await?
             .into_inner();
 
+        // Poll recent blockhashes.
+        let mut recent_blockhashes = IntervalStream::new(
+            tokio::time::interval(Duration::from_secs(30)),
+            Box::new(move || {
+                async {
+                    rpc.get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+                        .await
+                }
+                .boxed()
+            }),
+        );
+
         // Start jito tip config stream.
         let ws = PubsubClient::new(ws).await?;
         let (mut tip_config, _) = ws
@@ -163,6 +180,11 @@ impl JitoThread {
             tokio::select! {
                 biased;
 
+                opt = recent_blockhashes.next() => {
+                    let (hash, _) = opt.unwrap()?;
+
+                    self.update_tx.try_send(JitoUpdate::RecentBlockhash(hash)).unwrap();
+                },
                 opt = tip_config.next() => {
                     let config = opt.ok_or_else(|| eyre!("tip config stream closed"))?.value;
 
