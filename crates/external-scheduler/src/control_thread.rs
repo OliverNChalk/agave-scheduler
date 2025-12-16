@@ -13,8 +13,8 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
-use crate::args::{Args, SchedulerVariant};
-use crate::config::Config;
+use crate::args::Args;
+use crate::config::{Config, SchedulerConfig};
 use crate::events_thread::EventsThread;
 
 pub(crate) struct ControlThread {
@@ -63,18 +63,18 @@ impl ControlThread {
         threads.push(EventsThread::spawn(event_rx, nats_client, &config.host_name));
 
         // Spawn scheduler.
-        threads.extend(match args.scheduler {
-            SchedulerVariant::Batch => crate::scheduler_thread::spawn::<BatchScheduler>(
+        threads.extend(match config.scheduler {
+            SchedulerConfig::Batch(batch) => crate::scheduler_thread::spawn::<BatchScheduler>(
                 shutdown.clone(),
                 events,
                 args.bindings_ipc,
             ),
-            SchedulerVariant::Fifo => crate::scheduler_thread::spawn::<FifoScheduler>(
+            SchedulerConfig::Fifo => crate::scheduler_thread::spawn::<FifoScheduler>(
                 shutdown.clone(),
                 events,
                 args.bindings_ipc,
             ),
-            SchedulerVariant::Greedy => crate::scheduler_thread::spawn::<GreedyScheduler>(
+            SchedulerConfig::Greedy => crate::scheduler_thread::spawn::<GreedyScheduler>(
                 shutdown.clone(),
                 events,
                 args.bindings_ipc,
