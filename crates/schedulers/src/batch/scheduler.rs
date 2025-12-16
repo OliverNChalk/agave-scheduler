@@ -34,7 +34,7 @@ use solana_transaction::sanitized::MessageHash;
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
-    ChangeTipReceiverArgs, TipDistributionConfig, change_tip_receiver, init_tip_distribution,
+    ChangeTipReceiverArgs, TipDistributionArgs, change_tip_receiver, init_tip_distribution,
 };
 use crate::events::{Event, EventEmitter, SlotEvent};
 use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
@@ -52,14 +52,15 @@ const CHECK_WORKER: usize = 0;
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
 #[derive(Debug)]
-pub struct BatchArgs {
-    pub tip: TipDistributionConfig,
+pub struct BatchSchedulerArgs {
+    pub tip: TipDistributionArgs,
     pub jito: JitoArgs,
+    pub keypair: &'static Keypair,
 }
 
 pub struct BatchScheduler {
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
-    tip_distribution_config: TipDistributionConfig,
+    tip_distribution_config: TipDistributionArgs,
     keypair: &'static Keypair,
 
     builder_config: BuilderConfig,
@@ -83,11 +84,10 @@ impl BatchScheduler {
     #[must_use]
     pub fn new(
         events: Option<EventEmitter>,
-        config: BatchArgs,
-        keypair: &'static Keypair,
+        BatchSchedulerArgs { tip, jito, keypair }: BatchSchedulerArgs,
     ) -> (Self, Vec<JoinHandle<()>>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(128);
-        let jito_thread = JitoThread::spawn(jito_tx, config.jito, keypair);
+        let jito_thread = JitoThread::spawn(jito_tx, jito, keypair);
 
         let JitoUpdate::BuilderConfig(builder_config) =
             jito_rx.recv_timeout(Duration::from_secs(5)).unwrap()
@@ -98,7 +98,7 @@ impl BatchScheduler {
         (
             Self {
                 jito_rx,
-                tip_distribution_config: config.tip,
+                tip_distribution_config: tip,
                 keypair,
 
                 builder_config,

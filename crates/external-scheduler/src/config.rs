@@ -24,9 +24,9 @@ pub(crate) enum SchedulerConfig {
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchSchedulerConfig {
     #[serde(deserialize_with = "serde_with_expand_env::with_expand_envs")]
-    keypair: SecretString,
-    tip: TipDistributionConfig,
-    jito: JitoConfig,
+    pub(crate) keypair: SecretString,
+    pub(crate) tip: TipDistributionConfig,
+    pub(crate) jito: JitoConfig,
 }
 
 #[serde_as]

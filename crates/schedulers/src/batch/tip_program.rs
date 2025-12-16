@@ -23,7 +23,7 @@ const TIP_DISTRIBUTION_PROGRAM: Pubkey = pubkey!("4R3gSG8BpU4t19KYj8CfnbtRpnT8gt
 const TIP_DISTRIBUTION_CONFIG: Pubkey = pubkey!("8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt");
 
 #[derive(Debug, Clone, Copy)]
-pub struct TipDistributionConfig {
+pub struct TipDistributionArgs {
     pub vote_account: Pubkey,
     pub merkle_root_upload_authority: Pubkey,
     pub commission_bps: u16,
@@ -31,7 +31,7 @@ pub struct TipDistributionConfig {
 
 pub(crate) fn init_tip_distribution(
     keypair: &Keypair,
-    TipDistributionConfig { vote_account, merkle_root_upload_authority, commission_bps }: TipDistributionConfig,
+    TipDistributionArgs { vote_account, merkle_root_upload_authority, commission_bps }: TipDistributionArgs,
     epoch: Epoch,
     recent_blockhash: Hash,
 ) -> (Pubkey, Vec<u8>) {

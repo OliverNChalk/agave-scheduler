@@ -33,7 +33,7 @@ use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
 pub struct JitoArgs {
     pub http_rpc: String,
     pub ws_rpc: String,
-    pub url: String,
+    pub block_engine: String,
 }
 
 pub(crate) struct JitoThread {
@@ -56,8 +56,8 @@ impl JitoThread {
         let rpc = Box::leak(Box::new(RpcClient::new(config.http_rpc)));
 
         // Setup the block engine endpoint.
-        let enable_tls = config.url.starts_with("https");
-        let mut endpoint = Endpoint::from_shared(config.url)
+        let enable_tls = config.block_engine.starts_with("https");
+        let mut endpoint = Endpoint::from_shared(config.block_engine)
             .unwrap()
             .tcp_keepalive(Some(Duration::from_secs(60)));
         if enable_tls {

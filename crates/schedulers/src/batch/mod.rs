@@ -2,5 +2,6 @@ mod jito_thread;
 mod scheduler;
 mod tip_program;
 
-pub use scheduler::{BatchArgs, BatchScheduler};
-pub use tip_program::TipDistributionConfig;
+pub use jito_thread::JitoArgs;
+pub use scheduler::{BatchScheduler, BatchSchedulerArgs};
+pub use tip_program::TipDistributionArgs;
