@@ -32,7 +32,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::batch::jito_thread::{BuilderConfig, JitoConfig, JitoThread, JitoUpdate, TipConfig};
+use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
     ChangeTipReceiverArgs, TipDistributionConfig, change_tip_receiver, init_tip_distribution,
 };
@@ -51,10 +51,10 @@ const CHECK_WORKER: usize = 0;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
-#[derive(Debug, Deserialize)]
-pub struct BatchConfig {
-    tip: TipDistributionConfig,
-    jito: JitoConfig,
+#[derive(Debug)]
+pub struct BatchArgs {
+    pub tip: TipDistributionConfig,
+    pub jito: JitoArgs,
 }
 
 pub struct BatchScheduler {
@@ -83,7 +83,7 @@ impl BatchScheduler {
     #[must_use]
     pub fn new(
         events: Option<EventEmitter>,
-        config: BatchConfig,
+        config: BatchArgs,
         keypair: &'static Keypair,
     ) -> (Self, Vec<JoinHandle<()>>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(128);

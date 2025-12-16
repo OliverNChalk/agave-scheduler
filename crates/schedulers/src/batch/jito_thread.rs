@@ -29,11 +29,11 @@ use tracing::error;
 
 use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct JitoConfig {
-    pub(crate) http_rpc: String,
-    pub(crate) ws_rpc: String,
-    pub(crate) url: String,
+#[derive(Debug)]
+pub struct JitoArgs {
+    pub http_rpc: String,
+    pub ws_rpc: String,
+    pub url: String,
 }
 
 pub(crate) struct JitoThread {
@@ -45,7 +45,7 @@ pub(crate) struct JitoThread {
 impl JitoThread {
     pub(crate) fn spawn(
         update_tx: crossbeam_channel::Sender<JitoUpdate>,
-        config: JitoConfig,
+        config: JitoArgs,
         keypair: &'static Keypair,
     ) -> JoinHandle<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
