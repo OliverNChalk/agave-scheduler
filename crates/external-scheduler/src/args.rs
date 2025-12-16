@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum, ValueHint};
+use clap::{Parser, ValueHint};
 
 #[derive(Debug, Parser)]
 #[command(version = toolbox::version!(), long_version = toolbox::long_version!())]

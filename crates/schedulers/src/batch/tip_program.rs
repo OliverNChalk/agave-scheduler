@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use solana_clock::Epoch;
 use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};

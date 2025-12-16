@@ -2,7 +2,6 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::str::FromStr;
 
-use agave_schedulers::batch;
 use serde::Deserialize;
 use serde_with::serde_as;
 use solana_keypair::Pubkey;

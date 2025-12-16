@@ -12,7 +12,6 @@ use jito_protos::block_engine::{
     BlockBuilderFeeInfoRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
     SubscribePacketsRequest, SubscribePacketsResponse,
 };
-use serde::Deserialize;
 use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};
 use solana_packet::PACKET_DATA_SIZE;

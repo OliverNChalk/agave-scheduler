@@ -19,7 +19,6 @@ use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
-use serde::Deserialize;
 use solana_clock::{DEFAULT_SLOTS_PER_EPOCH, Slot};
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
