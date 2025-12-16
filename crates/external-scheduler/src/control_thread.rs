@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use agave_schedulers::batch::{self, BatchScheduler};
+use agave_schedulers::batch;
 use agave_schedulers::events::{EventContext, EventEmitter};
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
@@ -68,7 +68,7 @@ impl ControlThread {
             SchedulerConfig::Batch(batch) => {
                 let keypair =
                     Box::leak(Box::new(Keypair::from_base58_string(batch.keypair.expose())));
-                let (scheduler, workers) = BatchScheduler::new(
+                let (scheduler, workers) = batch::BatchScheduler::new(
                     Some(events),
                     batch::BatchSchedulerArgs {
                         tip: batch::TipDistributionArgs {
@@ -102,7 +102,7 @@ impl ControlThread {
                     shutdown.clone(),
                     args.bindings_ipc,
                     GreedyScheduler::new(Some(events)),
-                ))
+                ));
             }
         }
 
