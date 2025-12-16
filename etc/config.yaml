@@ -2,3 +2,4 @@
 host_name: "dev"
 nats_servers:
   - "127.0.0.1"
+scheduler: !Greedy
