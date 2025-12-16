@@ -1,11 +1,12 @@
 use std::time::Duration;
 
-use agave_schedulers::batch::BatchScheduler;
+use agave_schedulers::batch;
 use agave_schedulers::events::{EventContext, EventEmitter};
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use solana_keypair::Keypair;
 use tokio::runtime::Runtime;
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc;
@@ -13,8 +14,8 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
-use crate::args::{Args, SchedulerVariant};
-use crate::config::Config;
+use crate::args::Args;
+use crate::config::{Config, SchedulerConfig};
 use crate::events_thread::EventsThread;
 
 pub(crate) struct ControlThread {
@@ -62,24 +63,48 @@ impl ControlThread {
         let events = EventEmitter::new(event_ctx, event_tx);
         threads.push(EventsThread::spawn(event_rx, nats_client, &config.host_name));
 
-        // Spawn scheduler.
-        threads.extend(match args.scheduler {
-            SchedulerVariant::Batch => crate::scheduler_thread::spawn::<BatchScheduler>(
+        // Setup scheduler.
+        match config.scheduler {
+            SchedulerConfig::Batch(batch) => {
+                let keypair =
+                    Box::leak(Box::new(Keypair::from_base58_string(batch.keypair.expose())));
+                let (scheduler, workers) = batch::BatchScheduler::new(
+                    Some(events),
+                    batch::BatchSchedulerArgs {
+                        tip: batch::TipDistributionArgs {
+                            vote_account: batch.tip.vote_account,
+                            merkle_authority: batch.tip.merkle_authority,
+                            commission_bps: batch.tip.commission_bps,
+                        },
+                        jito: batch::JitoArgs {
+                            http_rpc: batch.jito.http_rpc,
+                            ws_rpc: batch.jito.ws_rpc,
+                            block_engine: batch.jito.block_engine,
+                        },
+                        keypair,
+                    },
+                );
+
+                threads.push(crate::scheduler_thread::spawn(
+                    shutdown.clone(),
+                    args.bindings_ipc,
+                    scheduler,
+                ));
+                threads.extend(workers);
+            }
+            SchedulerConfig::Fifo => threads.push(crate::scheduler_thread::spawn::<FifoScheduler>(
                 shutdown.clone(),
-                events,
                 args.bindings_ipc,
-            ),
-            SchedulerVariant::Fifo => crate::scheduler_thread::spawn::<FifoScheduler>(
-                shutdown.clone(),
-                events,
-                args.bindings_ipc,
-            ),
-            SchedulerVariant::Greedy => crate::scheduler_thread::spawn::<GreedyScheduler>(
-                shutdown.clone(),
-                events,
-                args.bindings_ipc,
-            ),
-        });
+                FifoScheduler::new(),
+            )),
+            SchedulerConfig::Greedy => {
+                threads.push(crate::scheduler_thread::spawn::<GreedyScheduler>(
+                    shutdown.clone(),
+                    args.bindings_ipc,
+                    GreedyScheduler::new(Some(events)),
+                ));
+            }
+        }
 
         // Use tokio to listen on all thread exits concurrently.
         let threads = threads

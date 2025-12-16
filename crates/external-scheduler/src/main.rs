@@ -3,7 +3,6 @@ mod config;
 mod control_thread;
 mod events_thread;
 mod scheduler_thread;
-mod schedulers;
 
 fn main() -> std::thread::Result<()> {
     use clap::Parser;

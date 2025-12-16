@@ -4,45 +4,59 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use eyre::eyre;
+use futures::{FutureExt, StreamExt};
 use jito_protos::auth::auth_service_client::AuthServiceClient;
 use jito_protos::auth::{GenerateAuthChallengeRequest, GenerateAuthTokensRequest, Role, Token};
 use jito_protos::block_engine::block_engine_validator_client::BlockEngineValidatorClient;
 use jito_protos::block_engine::{
-    SubscribeBundlesRequest, SubscribeBundlesResponse, SubscribePacketsRequest,
-    SubscribePacketsResponse,
+    BlockBuilderFeeInfoRequest, SubscribeBundlesRequest, SubscribeBundlesResponse,
+    SubscribePacketsRequest, SubscribePacketsResponse,
 };
+use solana_hash::Hash;
 use solana_keypair::{Keypair, Signer};
 use solana_packet::PACKET_DATA_SIZE;
+use solana_pubkey::Pubkey;
+use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_rpc_client_types::config::{CommitmentConfig, RpcAccountInfoConfig, UiAccountEncoding};
+use solana_rpc_client_types::response::UiAccount;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
+use toolbox::tokio::IntervalStream;
 use tracing::error;
 
-pub(crate) struct JitoConfig {
-    pub(crate) url: String,
+use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
+
+#[derive(Debug)]
+pub struct JitoArgs {
+    pub http_rpc: String,
+    pub ws_rpc: String,
+    pub block_engine: String,
 }
 
 pub(crate) struct JitoThread {
-    packet_tx: crossbeam_channel::Sender<Vec<u8>>,
-    bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
+    update_tx: crossbeam_channel::Sender<JitoUpdate>,
     endpoint: Endpoint,
-    keypair: Keypair,
+    keypair: &'static Keypair,
 }
 
 impl JitoThread {
     pub(crate) fn spawn(
-        packet_tx: crossbeam_channel::Sender<Vec<u8>>,
-        bundle_tx: crossbeam_channel::Sender<Vec<Vec<u8>>>,
-        config: JitoConfig,
-        keypair: Keypair,
+        update_tx: crossbeam_channel::Sender<JitoUpdate>,
+        config: JitoArgs,
+        keypair: &'static Keypair,
     ) -> JoinHandle<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
+
+        let rpc = Box::leak(Box::new(RpcClient::new(config.http_rpc)));
+
         // Setup the block engine endpoint.
-        let enable_tls = config.url.starts_with("https");
-        let mut endpoint = Endpoint::from_shared(config.url)
+        let enable_tls = config.block_engine.starts_with("https");
+        let mut endpoint = Endpoint::from_shared(config.block_engine)
             .unwrap()
             .tcp_keepalive(Some(Duration::from_secs(60)));
         if enable_tls {
@@ -52,19 +66,19 @@ impl JitoThread {
         std::thread::Builder::new()
             .name("Jito".to_string())
             .spawn(move || {
-                rt.block_on(JitoThread { packet_tx, bundle_tx, endpoint, keypair }.run());
+                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc));
             })
             .unwrap()
     }
 
-    async fn run(self) {
+    async fn run(self, rpc: &'static RpcClient, ws: &str) {
         loop {
-            let Err(err) = self.run_until_err().await;
+            let Err(err) = self.run_until_err(rpc, ws).await;
             error!(%err, "Jito connection errored");
         }
     }
 
-    async fn run_until_err(&self) -> eyre::Result<Infallible> {
+    async fn run_until_err(&self, rpc: &'static RpcClient, ws: &str) -> eyre::Result<Infallible> {
         // Connect to the auth service.
         let auth = self.endpoint.connect().await?;
         let mut auth = AuthServiceClient::new(auth);
@@ -112,6 +126,18 @@ impl JitoThread {
             AuthInterceptor { access: access.clone() },
         );
 
+        // Fetch block builder config (for now we don't refresh).
+        let block_builder_info = block_engine
+            .get_block_builder_fee_info(BlockBuilderFeeInfoRequest {})
+            .await?
+            .into_inner();
+        self.update_tx
+            .try_send(JitoUpdate::BuilderConfig(BuilderConfig {
+                key: block_builder_info.pubkey.parse().unwrap(),
+                commission: block_builder_info.commission,
+            }))
+            .unwrap();
+
         // Start the bundle & packet streams.
         let mut bundles = block_engine
             .subscribe_bundles(SubscribeBundlesRequest {})
@@ -122,11 +148,47 @@ impl JitoThread {
             .await?
             .into_inner();
 
+        // Poll recent blockhashes.
+        let mut recent_blockhashes = IntervalStream::new(
+            tokio::time::interval(Duration::from_secs(30)),
+            Box::new(move || {
+                async {
+                    rpc.get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+                        .await
+                }
+                .boxed()
+            }),
+        );
+
+        // Start jito tip config stream.
+        let ws = PubsubClient::new(ws).await?;
+        let (mut tip_config, _) = ws
+            .account_subscribe(
+                &TIP_PAYMENT_CONFIG,
+                Some(RpcAccountInfoConfig {
+                    encoding: Some(UiAccountEncoding::Base64),
+                    data_slice: None,
+                    commitment: Some(CommitmentConfig::processed()),
+                    min_context_slot: None,
+                }),
+            )
+            .await?;
+
         // Consume bundles & packets until error.
         loop {
             tokio::select! {
                 biased;
 
+                opt = recent_blockhashes.next() => {
+                    let (hash, _) = opt.unwrap()?;
+
+                    self.update_tx.try_send(JitoUpdate::RecentBlockhash(hash)).unwrap();
+                },
+                opt = tip_config.next() => {
+                    let config = opt.ok_or_else(|| eyre!("tip config stream closed"))?.value;
+
+                    self.on_tip_config(&config);
+                }
                 res = bundles.message() => {
                     let bundles = res?.ok_or_else(|| eyre!("bundle stream closed"))?;
 
@@ -139,6 +201,17 @@ impl JitoThread {
                 },
             }
         }
+    }
+
+    fn on_tip_config(&self, config: &UiAccount) {
+        let data = config.data.decode().unwrap();
+
+        let tip_receiver = Pubkey::new_from_array(*arrayref::array_ref![&data, 8, 32]);
+        let block_builder = Pubkey::new_from_array(*arrayref::array_ref![&data, 40, 32]);
+
+        self.update_tx
+            .try_send(JitoUpdate::TipConfig(TipConfig { tip_receiver, block_builder }))
+            .unwrap();
     }
 
     fn on_bundles(&self, bundles: SubscribeBundlesResponse) {
@@ -156,7 +229,7 @@ impl JitoThread {
             })
             .filter(|bundle| !bundle.is_empty())
         {
-            self.bundle_tx.try_send(bundle).unwrap();
+            self.update_tx.try_send(JitoUpdate::Bundle(bundle)).unwrap();
         }
     }
 
@@ -167,9 +240,28 @@ impl JitoThread {
             .flat_map(|batch| batch.packets)
             .map(|packet| packet.data)
         {
-            self.packet_tx.try_send(packet).unwrap();
+            self.update_tx.try_send(JitoUpdate::Packet(packet)).unwrap();
         }
     }
+}
+
+pub(crate) enum JitoUpdate {
+    BuilderConfig(BuilderConfig),
+    TipConfig(TipConfig),
+    RecentBlockhash(Hash),
+    Packet(Vec<u8>),
+    Bundle(Vec<Vec<u8>>),
+}
+
+pub(crate) struct BuilderConfig {
+    pub(crate) key: Pubkey,
+    pub(crate) commission: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct TipConfig {
+    pub(crate) tip_receiver: Pubkey,
+    pub(crate) block_builder: Pubkey,
 }
 
 struct AuthInterceptor {
