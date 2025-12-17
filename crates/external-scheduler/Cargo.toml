@@ -13,6 +13,7 @@ agave-bridge.workspace = true
 agave-schedulers = { workspace = true, features = ["batch"] }
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
 futures = { workspace = true, features = ["alloc"] }
 metrics-nats-exporter.workspace = true
 serde = { workspace = true, features = ["derive"] }
