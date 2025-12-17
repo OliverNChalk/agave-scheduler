@@ -69,6 +69,7 @@ impl ControlThread {
                 let keypair =
                     Box::leak(Box::new(Keypair::read_from_file(batch.keypair_path).unwrap()));
                 let (scheduler, workers) = batch::BatchScheduler::new(
+                    shutdown.clone(),
                     Some(events),
                     batch::BatchSchedulerArgs {
                         tip: batch::TipDistributionArgs {

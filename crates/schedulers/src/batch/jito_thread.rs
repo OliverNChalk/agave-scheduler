@@ -23,6 +23,7 @@ use solana_rpc_client_types::response::UiAccount;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
+use toolbox::shutdown::Shutdown;
 use toolbox::tokio::IntervalStream;
 use tracing::error;
 
@@ -43,6 +44,7 @@ pub(crate) struct JitoThread {
 
 impl JitoThread {
     pub(crate) fn spawn(
+        shutdown: Shutdown,
         update_tx: crossbeam_channel::Sender<JitoUpdate>,
         config: JitoArgs,
         keypair: &'static Keypair,
@@ -66,7 +68,12 @@ impl JitoThread {
         std::thread::Builder::new()
             .name("Jito".to_string())
             .spawn(move || {
-                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc));
+                let fut = futures::future::select(
+                    Box::pin(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc)),
+                    Box::pin(shutdown.cancelled()),
+                );
+
+                rt.block_on(fut);
             })
             .unwrap()
     }
