@@ -298,7 +298,7 @@ impl BatchScheduler {
     {
         while let Ok(update) = self.jito_rx.try_recv() {
             match update {
-                JitoUpdate::BuilderConfig { .. } => unreachable!(),
+                JitoUpdate::BuilderConfig { .. } => {}
                 JitoUpdate::TipConfig(config) => self.tip_config = Some(config),
                 JitoUpdate::RecentBlockhash(hash) => self.recent_blockhash = hash,
                 JitoUpdate::Packet(packet) => self.on_packet(bridge, &packet),
