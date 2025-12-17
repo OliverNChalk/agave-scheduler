@@ -74,7 +74,7 @@ impl JitoThread {
     async fn run(self, rpc: &'static RpcClient, ws: &str) {
         loop {
             let Err(err) = self.run_until_err(rpc, ws).await;
-            error!(%err, "Jito connection errored");
+            error!(err = format!("{err:#}"), "Jito connection errored");
         }
     }
 
