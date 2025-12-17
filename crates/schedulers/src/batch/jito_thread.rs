@@ -25,7 +25,7 @@ use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
 use toolbox::shutdown::Shutdown;
 use toolbox::tokio::IntervalStream;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
 
@@ -182,6 +182,8 @@ impl JitoThread {
                 }),
             )
             .await?;
+
+        info!("Jito connected & subscribed");
 
         // Consume bundles & packets until error.
         loop {
