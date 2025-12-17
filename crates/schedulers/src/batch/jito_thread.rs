@@ -75,6 +75,8 @@ impl JitoThread {
         loop {
             let Err(err) = self.run_until_err(rpc, ws).await;
             error!(err = format!("{err:#}"), "Jito connection errored");
+
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
     }
 
