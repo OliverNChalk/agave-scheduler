@@ -69,8 +69,9 @@ impl JitoThread {
             .name("Jito".to_string())
             .spawn(move || {
                 let fut = futures::future::select(
-                    Box::pin(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc)),
+                    // NB: The first future is given priority which is what we want here.
                     Box::pin(shutdown.cancelled()),
+                    Box::pin(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc)),
                 );
 
                 rt.block_on(fut);
