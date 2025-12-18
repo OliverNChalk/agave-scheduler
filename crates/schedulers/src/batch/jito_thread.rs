@@ -23,8 +23,9 @@ use solana_rpc_client_types::response::UiAccount;
 use tonic::service::Interceptor;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tonic::{Request, Status};
+use toolbox::shutdown::Shutdown;
 use toolbox::tokio::IntervalStream;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
 
@@ -43,6 +44,7 @@ pub(crate) struct JitoThread {
 
 impl JitoThread {
     pub(crate) fn spawn(
+        shutdown: Shutdown,
         update_tx: crossbeam_channel::Sender<JitoUpdate>,
         config: JitoArgs,
         keypair: &'static Keypair,
@@ -66,7 +68,13 @@ impl JitoThread {
         std::thread::Builder::new()
             .name("Jito".to_string())
             .spawn(move || {
-                rt.block_on(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc));
+                let fut = futures::future::select(
+                    // NB: The first future is given priority which is what we want here.
+                    Box::pin(shutdown.cancelled()),
+                    Box::pin(JitoThread { update_tx, endpoint, keypair }.run(rpc, &config.ws_rpc)),
+                );
+
+                rt.block_on(fut);
             })
             .unwrap()
     }
@@ -74,7 +82,9 @@ impl JitoThread {
     async fn run(self, rpc: &'static RpcClient, ws: &str) {
         loop {
             let Err(err) = self.run_until_err(rpc, ws).await;
-            error!(%err, "Jito connection errored");
+            error!(?err, "Jito connection errored");
+
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
     }
 
@@ -173,6 +183,8 @@ impl JitoThread {
                 }),
             )
             .await?;
+
+        info!("Jito connected & subscribed");
 
         // Consume bundles & packets until error.
         loop {

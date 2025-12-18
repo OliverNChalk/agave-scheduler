@@ -16,6 +16,7 @@ use agave_scheduler_bindings::{
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
+use crossbeam_channel::TryRecvError;
 use hashbrown::HashMap;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -30,6 +31,7 @@ use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
+use toolbox::shutdown::Shutdown;
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
@@ -58,6 +60,7 @@ pub struct BatchSchedulerArgs {
 }
 
 pub struct BatchScheduler {
+    shutdown: Shutdown,
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
     tip_distribution_config: TipDistributionArgs,
     keypair: &'static Keypair,
@@ -82,11 +85,12 @@ pub struct BatchScheduler {
 impl BatchScheduler {
     #[must_use]
     pub fn new(
+        shutdown: Shutdown,
         events: Option<EventEmitter>,
         BatchSchedulerArgs { tip, jito, keypair }: BatchSchedulerArgs,
     ) -> (Self, Vec<JoinHandle<()>>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(128);
-        let jito_thread = JitoThread::spawn(jito_tx, jito, keypair);
+        let jito_thread = JitoThread::spawn(shutdown.clone(), jito_tx, jito, keypair);
 
         let JitoUpdate::BuilderConfig(builder_config) =
             jito_rx.recv_timeout(Duration::from_secs(5)).unwrap()
@@ -96,6 +100,7 @@ impl BatchScheduler {
 
         (
             Self {
+                shutdown,
                 jito_rx,
                 tip_distribution_config: tip,
                 keypair,
@@ -296,13 +301,15 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        while let Ok(update) = self.jito_rx.try_recv() {
-            match update {
-                JitoUpdate::BuilderConfig { .. } => unreachable!(),
-                JitoUpdate::TipConfig(config) => self.tip_config = Some(config),
-                JitoUpdate::RecentBlockhash(hash) => self.recent_blockhash = hash,
-                JitoUpdate::Packet(packet) => self.on_packet(bridge, &packet),
-                JitoUpdate::Bundle(bundle) => self.on_bundle(bridge, bundle),
+        loop {
+            match self.jito_rx.try_recv() {
+                Ok(JitoUpdate::BuilderConfig { .. }) => {}
+                Ok(JitoUpdate::TipConfig(config)) => self.tip_config = Some(config),
+                Ok(JitoUpdate::RecentBlockhash(hash)) => self.recent_blockhash = hash,
+                Ok(JitoUpdate::Packet(packet)) => self.on_packet(bridge, &packet),
+                Ok(JitoUpdate::Bundle(bundle)) => self.on_bundle(bridge, bundle),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => assert!(self.shutdown.is_shutdown()),
             }
         }
     }

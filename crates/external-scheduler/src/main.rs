@@ -18,6 +18,9 @@ fn main() -> std::thread::Result<()> {
     // Log build information (as soon as possible).
     toolbox::log_build_info!();
 
+    // Setup color-eyre.
+    color_eyre::install().unwrap();
+
     // Setup standard panic handling.
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {

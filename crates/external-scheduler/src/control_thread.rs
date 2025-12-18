@@ -6,7 +6,7 @@ use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use solana_keypair::Keypair;
+use solana_keypair::{EncodableKey, Keypair};
 use tokio::runtime::Runtime;
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc;
@@ -67,8 +67,9 @@ impl ControlThread {
         match config.scheduler {
             SchedulerConfig::Batch(batch) => {
                 let keypair =
-                    Box::leak(Box::new(Keypair::from_base58_string(batch.keypair.expose())));
+                    Box::leak(Box::new(Keypair::read_from_file(batch.keypair_path).unwrap()));
                 let (scheduler, workers) = batch::BatchScheduler::new(
+                    shutdown.clone(),
                     Some(events),
                     batch::BatchSchedulerArgs {
                         tip: batch::TipDistributionArgs {

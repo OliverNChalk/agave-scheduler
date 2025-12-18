@@ -23,7 +23,9 @@
           pkgs = import nixpkgs { inherit system; };
         in
         {
-          default = pkgs.mkShell { };
+          default = pkgs.mkShell {
+            packages = with pkgs; [ nats-server ];
+          };
         }
       );
     };

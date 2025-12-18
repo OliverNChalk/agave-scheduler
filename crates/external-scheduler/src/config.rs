@@ -1,6 +1,5 @@
-use std::convert::Infallible;
 use std::fmt::Debug;
-use std::str::FromStr;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -22,8 +21,7 @@ pub(crate) enum SchedulerConfig {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchSchedulerConfig {
-    #[serde(deserialize_with = "serde_with_expand_env::with_expand_envs")]
-    pub(crate) keypair: SecretString,
+    pub(crate) keypair_path: PathBuf,
     pub(crate) tip: TipDistributionConfig,
     pub(crate) jito: JitoConfig,
 }
@@ -43,28 +41,4 @@ pub(crate) struct JitoConfig {
     pub(crate) http_rpc: String,
     pub(crate) ws_rpc: String,
     pub(crate) block_engine: String,
-}
-
-#[derive(Deserialize)]
-#[repr(transparent)]
-pub(crate) struct SecretString(String);
-
-impl SecretString {
-    pub(crate) fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Debug for SecretString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<REDACTED>")
-    }
-}
-
-impl FromStr for SecretString {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.to_string()))
-    }
 }
