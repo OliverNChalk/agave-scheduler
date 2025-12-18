@@ -275,7 +275,7 @@ impl BatchScheduler {
 
             bridge.tx_drop(id.key);
         }
-        self.metrics.recv_evict.increment(shortfall as u64);
+        self.metrics.recv_tpu_evict.increment(shortfall as u64);
 
         // TODO: Need to dedupe already seen transactions?
 
@@ -283,12 +283,12 @@ impl BatchScheduler {
             |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
-                    self.metrics.recv_ok.increment(1);
+                    self.metrics.recv_tpu_ok.increment(1);
 
                     TxDecision::Keep
                 }
                 None => {
-                    self.metrics.recv_err.increment(1);
+                    self.metrics.recv_tpu_err.increment(1);
 
                     TxDecision::Drop
                 }
@@ -343,13 +343,15 @@ impl BatchScheduler {
                     bridge.tx_drop(key);
                 }
 
-                // TODO: Metrics.
+                self.metrics.recv_bundle_err.increment(1);
+
                 return;
             };
 
             keys.push(key);
         }
 
+        self.metrics.recv_bundle_ok.increment(1);
         self.bundles.push_back(keys);
     }
 
@@ -395,6 +397,25 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         self.schedule_locks.clear();
+
+        // TEMP: Schedule all bundles.
+        while let Some(bundle) = self.bundles.pop_front() {
+            self.schedule_batch.clear();
+            self.schedule_batch
+                .extend(bundle.iter().map(|key| KeyedTransactionMeta {
+                    key: *key,
+                    meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
+                }));
+
+            bridge.schedule(ScheduleBatch {
+                worker: 1,
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE
+                    | execution_flags::DROP_ON_FAILURE
+                    | execution_flags::ALL_OR_NOTHING,
+            });
+        }
 
         debug_assert_eq!(bridge.progress().leader_state, IS_LEADER);
         let budget_percentage =
@@ -593,9 +614,11 @@ struct BatchMetrics {
     unchecked_len: Gauge,
     checked_len: Gauge,
     cu_in_flight: Gauge,
-    recv_ok: Counter,
-    recv_err: Counter,
-    recv_evict: Counter,
+    recv_tpu_ok: Counter,
+    recv_tpu_err: Counter,
+    recv_tpu_evict: Counter,
+    recv_bundle_ok: Counter,
+    recv_bundle_err: Counter,
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
@@ -613,9 +636,11 @@ impl BatchMetrics {
             next_leader_slot: gauge!("next_leader_slot"),
             unchecked_len: gauge!("unchecked_len"),
             checked_len: gauge!("checked_len"),
-            recv_ok: counter!("recv_ok"),
-            recv_err: counter!("recv_err"),
-            recv_evict: counter!("recv_evict"),
+            recv_tpu_ok: counter!("recv_tpu_ok"),
+            recv_tpu_err: counter!("recv_tpu_err"),
+            recv_tpu_evict: counter!("recv_tpu_evict"),
+            recv_bundle_ok: counter!("recv_bundle_ok"),
+            recv_bundle_err: counter!("recv_bundle_err"),
             cu_in_flight: gauge!("cu_in_flight"),
             check_requested: counter!("check_requested"),
             check_ok: counter!("check_ok"),
