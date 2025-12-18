@@ -303,13 +303,11 @@ impl BatchScheduler {
     {
         loop {
             match self.jito_rx.try_recv() {
-                Ok(update) => match update {
-                    JitoUpdate::BuilderConfig { .. } => {}
-                    JitoUpdate::TipConfig(config) => self.tip_config = Some(config),
-                    JitoUpdate::RecentBlockhash(hash) => self.recent_blockhash = hash,
-                    JitoUpdate::Packet(packet) => self.on_packet(bridge, &packet),
-                    JitoUpdate::Bundle(bundle) => self.on_bundle(bridge, bundle),
-                },
+                Ok(JitoUpdate::BuilderConfig { .. }) => {}
+                Ok(JitoUpdate::TipConfig(config)) => self.tip_config = Some(config),
+                Ok(JitoUpdate::RecentBlockhash(hash)) => self.recent_blockhash = hash,
+                Ok(JitoUpdate::Packet(packet)) => self.on_packet(bridge, &packet),
+                Ok(JitoUpdate::Bundle(bundle)) => self.on_bundle(bridge, bundle),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => assert!(self.shutdown.is_shutdown()),
             }
