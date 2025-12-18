@@ -32,6 +32,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 use toolbox::shutdown::Shutdown;
+use tracing::info;
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
@@ -207,6 +208,8 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
+        info!("Becoming tip receiver");
+
         let (tip_distribution_key, init_tip_distribution) = init_tip_distribution(
             self.keypair,
             self.tip_distribution_config,
