@@ -130,7 +130,6 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         // Drain the progress tracker & check for roll.
-        bridge.drain_progress();
         self.check_slot_roll(bridge);
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
@@ -174,6 +173,8 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
+        bridge.drain_progress();
+
         let was_leader = self.slot_event.is_leader;
         let progress = bridge.progress();
         if self.slot == progress.current_slot {
