@@ -166,6 +166,7 @@ impl BatchScheduler {
             .unchecked_len
             .set(self.unchecked_tx.len() as f64);
         self.metrics.checked_len.set(self.checked_tx.len() as f64);
+        self.metrics.bundles_len.set(self.bundles.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
@@ -617,6 +618,7 @@ struct BatchMetrics {
     next_leader_slot: Gauge,
     unchecked_len: Gauge,
     checked_len: Gauge,
+    bundles_len: Gauge,
     cu_in_flight: Gauge,
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
@@ -640,6 +642,7 @@ impl BatchMetrics {
             next_leader_slot: gauge!("next_leader_slot"),
             unchecked_len: gauge!("unchecked_len"),
             checked_len: gauge!("checked_len"),
+            bundles_len: gauge!("bundles_len"),
             recv_tpu_ok: counter!("recv_tpu_ok"),
             recv_tpu_err: counter!("recv_tpu_err"),
             recv_tpu_evict: counter!("recv_tpu_evict"),
