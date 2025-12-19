@@ -163,9 +163,11 @@ impl BatchScheduler {
             .next_leader_slot
             .set(bridge.progress().next_leader_slot as f64);
         self.metrics
-            .unchecked_len
+            .tpu_unchecked_len
             .set(self.unchecked_tx.len() as f64);
-        self.metrics.checked_len.set(self.checked_tx.len() as f64);
+        self.metrics
+            .tpu_checked_len
+            .set(self.checked_tx.len() as f64);
         self.metrics.bundles_len.set(self.bundles.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
@@ -616,8 +618,8 @@ impl BatchScheduler {
 struct BatchMetrics {
     slot: Gauge,
     next_leader_slot: Gauge,
-    unchecked_len: Gauge,
-    checked_len: Gauge,
+    tpu_unchecked_len: Gauge,
+    tpu_checked_len: Gauge,
     bundles_len: Gauge,
     cu_in_flight: Gauge,
     recv_tpu_ok: Counter,
@@ -640,22 +642,22 @@ impl BatchMetrics {
         Self {
             slot: gauge!("slot"),
             next_leader_slot: gauge!("next_leader_slot"),
-            unchecked_len: gauge!("unchecked_len"),
-            checked_len: gauge!("checked_len"),
-            bundles_len: gauge!("bundles_len"),
-            recv_tpu_ok: counter!("recv_tpu_ok"),
-            recv_tpu_err: counter!("recv_tpu_err"),
-            recv_tpu_evict: counter!("recv_tpu_evict"),
-            recv_bundle_ok: counter!("recv_bundle_ok"),
-            recv_bundle_err: counter!("recv_bundle_err"),
+            tpu_unchecked_len: gauge!("container_len", "var" => "tpu_unchecked"),
+            tpu_checked_len: gauge!("container_len", "var" => "tpu_checked"),
+            bundles_len: gauge!("container_len", "var" => "bundles"),
+            recv_tpu_ok: counter!("recv_tpu", "var" => "ok"),
+            recv_tpu_err: counter!("recv_tpu", "var" => "err"),
+            recv_tpu_evict: counter!("recv_tpu", "var" => "evict"),
+            recv_bundle_ok: counter!("recv_bundle", "var" => "ok"),
+            recv_bundle_err: counter!("recv_bundle", "var" => "err"),
             cu_in_flight: gauge!("cu_in_flight"),
-            check_requested: counter!("check_requested"),
-            check_ok: counter!("check_ok"),
-            check_err: counter!("check_err"),
-            check_evict: counter!("check_evict"),
-            execute_requested: counter!("execute_requested"),
-            execute_ok: counter!("execute_ok"),
-            execute_err: counter!("execute_err"),
+            check_requested: counter!("check", "var" => "requested"),
+            check_ok: counter!("check", "var" => "ok"),
+            check_err: counter!("check", "var" => "err"),
+            check_evict: counter!("check", "var" => "evict"),
+            execute_requested: counter!("execute", "var" => "requested"),
+            execute_ok: counter!("execute_ok", "var" => "ok"),
+            execute_err: counter!("execute_err", "var" => "err"),
         }
     }
 }
