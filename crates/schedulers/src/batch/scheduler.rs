@@ -158,7 +158,9 @@ impl BatchScheduler {
         }
 
         // Update metrics.
-        self.metrics.slot.set(bridge.progress().current_slot as f64);
+        self.metrics
+            .current_slot
+            .set(bridge.progress().current_slot as f64);
         self.metrics
             .next_leader_slot
             .set(bridge.progress().next_leader_slot as f64);
@@ -616,7 +618,7 @@ impl BatchScheduler {
 }
 
 struct BatchMetrics {
-    slot: Gauge,
+    current_slot: Gauge,
     next_leader_slot: Gauge,
     tpu_unchecked_len: Gauge,
     tpu_checked_len: Gauge,
@@ -640,8 +642,8 @@ struct BatchMetrics {
 impl BatchMetrics {
     fn new() -> Self {
         Self {
-            slot: gauge!("slot"),
-            next_leader_slot: gauge!("next_leader_slot"),
+            current_slot: gauge!("slot", "var" => "current"),
+            next_leader_slot: gauge!("slot", "var" => "next_leader"),
             tpu_unchecked_len: gauge!("container_len", "var" => "tpu_unchecked"),
             tpu_checked_len: gauge!("container_len", "var" => "tpu_checked"),
             bundles_len: gauge!("container_len", "var" => "bundles"),
