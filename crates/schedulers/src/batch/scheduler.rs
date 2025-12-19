@@ -32,6 +32,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 use toolbox::shutdown::Shutdown;
+use tracing::info;
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
@@ -129,7 +130,6 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         // Drain the progress tracker & check for roll.
-        bridge.drain_progress();
         self.check_slot_roll(bridge);
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
@@ -158,14 +158,19 @@ impl BatchScheduler {
         }
 
         // Update metrics.
-        self.metrics.slot.set(bridge.progress().current_slot as f64);
+        self.metrics
+            .current_slot
+            .set(bridge.progress().current_slot as f64);
         self.metrics
             .next_leader_slot
             .set(bridge.progress().next_leader_slot as f64);
         self.metrics
-            .unchecked_len
+            .tpu_unchecked_len
             .set(self.unchecked_tx.len() as f64);
-        self.metrics.checked_len.set(self.checked_tx.len() as f64);
+        self.metrics
+            .tpu_checked_len
+            .set(self.checked_tx.len() as f64);
+        self.metrics.bundles_len.set(self.bundles.len() as f64);
         self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
     }
 
@@ -173,6 +178,8 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
+        bridge.drain_progress();
+
         let was_leader = self.slot_event.is_leader;
         let progress = bridge.progress();
         if self.slot == progress.current_slot {
@@ -207,6 +214,8 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
+        info!("Becoming tip receiver");
+
         let (tip_distribution_key, init_tip_distribution) = init_tip_distribution(
             self.keypair,
             self.tip_distribution_config,
@@ -275,7 +284,7 @@ impl BatchScheduler {
 
             bridge.tx_drop(id.key);
         }
-        self.metrics.recv_evict.increment(shortfall as u64);
+        self.metrics.recv_tpu_evict.increment(shortfall as u64);
 
         // TODO: Need to dedupe already seen transactions?
 
@@ -283,12 +292,12 @@ impl BatchScheduler {
             |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
-                    self.metrics.recv_ok.increment(1);
+                    self.metrics.recv_tpu_ok.increment(1);
 
                     TxDecision::Keep
                 }
                 None => {
-                    self.metrics.recv_err.increment(1);
+                    self.metrics.recv_tpu_err.increment(1);
 
                     TxDecision::Drop
                 }
@@ -343,13 +352,15 @@ impl BatchScheduler {
                     bridge.tx_drop(key);
                 }
 
-                // TODO: Metrics.
+                self.metrics.recv_bundle_err.increment(1);
+
                 return;
             };
 
             keys.push(key);
         }
 
+        self.metrics.recv_bundle_ok.increment(1);
         self.bundles.push_back(keys);
     }
 
@@ -395,6 +406,25 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         self.schedule_locks.clear();
+
+        // TEMP: Schedule all bundles.
+        while let Some(bundle) = self.bundles.pop_front() {
+            self.schedule_batch.clear();
+            self.schedule_batch
+                .extend(bundle.iter().map(|key| KeyedTransactionMeta {
+                    key: *key,
+                    meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
+                }));
+
+            bridge.schedule(ScheduleBatch {
+                worker: 1,
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE
+                    | execution_flags::DROP_ON_FAILURE
+                    | execution_flags::ALL_OR_NOTHING,
+            });
+        }
 
         debug_assert_eq!(bridge.progress().leader_state, IS_LEADER);
         let budget_percentage =
@@ -588,14 +618,17 @@ impl BatchScheduler {
 }
 
 struct BatchMetrics {
-    slot: Gauge,
+    current_slot: Gauge,
     next_leader_slot: Gauge,
-    unchecked_len: Gauge,
-    checked_len: Gauge,
+    tpu_unchecked_len: Gauge,
+    tpu_checked_len: Gauge,
+    bundles_len: Gauge,
     cu_in_flight: Gauge,
-    recv_ok: Counter,
-    recv_err: Counter,
-    recv_evict: Counter,
+    recv_tpu_ok: Counter,
+    recv_tpu_err: Counter,
+    recv_tpu_evict: Counter,
+    recv_bundle_ok: Counter,
+    recv_bundle_err: Counter,
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
@@ -609,21 +642,24 @@ struct BatchMetrics {
 impl BatchMetrics {
     fn new() -> Self {
         Self {
-            slot: gauge!("slot"),
-            next_leader_slot: gauge!("next_leader_slot"),
-            unchecked_len: gauge!("unchecked_len"),
-            checked_len: gauge!("checked_len"),
-            recv_ok: counter!("recv_ok"),
-            recv_err: counter!("recv_err"),
-            recv_evict: counter!("recv_evict"),
+            current_slot: gauge!("slot", "var" => "current"),
+            next_leader_slot: gauge!("slot", "var" => "next_leader"),
+            tpu_unchecked_len: gauge!("container_len", "var" => "tpu_unchecked"),
+            tpu_checked_len: gauge!("container_len", "var" => "tpu_checked"),
+            bundles_len: gauge!("container_len", "var" => "bundles"),
+            recv_tpu_ok: counter!("recv_tpu", "var" => "ok"),
+            recv_tpu_err: counter!("recv_tpu", "var" => "err"),
+            recv_tpu_evict: counter!("recv_tpu", "var" => "evict"),
+            recv_bundle_ok: counter!("recv_bundle", "var" => "ok"),
+            recv_bundle_err: counter!("recv_bundle", "var" => "err"),
             cu_in_flight: gauge!("cu_in_flight"),
-            check_requested: counter!("check_requested"),
-            check_ok: counter!("check_ok"),
-            check_err: counter!("check_err"),
-            check_evict: counter!("check_evict"),
-            execute_requested: counter!("execute_requested"),
-            execute_ok: counter!("execute_ok"),
-            execute_err: counter!("execute_err"),
+            check_requested: counter!("check", "var" => "requested"),
+            check_ok: counter!("check", "var" => "ok"),
+            check_err: counter!("check", "var" => "err"),
+            check_evict: counter!("check", "var" => "evict"),
+            execute_requested: counter!("execute", "var" => "requested"),
+            execute_ok: counter!("execute_ok", "var" => "ok"),
+            execute_err: counter!("execute_err", "var" => "err"),
         }
     }
 }
