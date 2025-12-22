@@ -636,7 +636,6 @@ struct BatchMetrics {
     execute_requested: Counter,
     execute_ok: Counter,
     execute_err: Counter,
-    // TODO: Inspect execute responses to determine ok/err.
 }
 
 impl BatchMetrics {
