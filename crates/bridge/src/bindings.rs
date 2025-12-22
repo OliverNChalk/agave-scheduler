@@ -186,6 +186,14 @@ where
     fn tx_drop(&mut self, key: TransactionKey) {
         let state = self.state.remove(key).unwrap();
 
+        if let Some(keys) = state.keys {
+            // SAFETY
+            // - We own these pointers/allocations exclusively.
+            unsafe {
+                keys.free(&self.allocator);
+            }
+        }
+
         // SAFETY
         // - We own the allocation exclusively.
         unsafe {
@@ -246,6 +254,8 @@ where
             // Remove & free the TX if the scheduler doesn't want it.
             if cb(self, key) == TxDecision::Drop {
                 let state = self.state.remove(key).unwrap();
+                assert!(state.keys.is_none());
+
                 // SAFETY:
                 // - We own `tx` exclusively.
                 unsafe { state.data.into_inner_data().free(&self.allocator) };
@@ -377,7 +387,22 @@ where
         ptrs.index += 1;
         match ptrs.index.cmp(&ptrs.len) {
             Ordering::Greater => unreachable!(),
-            Ordering::Equal => self.worker_response = None,
+            // BUG: Need to free the response batch.
+            Ordering::Equal => {
+                let ptrs = self.worker_response.take().unwrap();
+
+                // SAFETY:
+                // - It is our responsibility to free the response pointers. The transactin
+                //   lifetimes we are already managing separately via Keep/Drop.
+                unsafe {
+                    self.allocator.free(ptrs.metas.cast());
+                    match ptrs.responses {
+                        WorkerResponseBatch::Unprocessed => {}
+                        WorkerResponseBatch::Check(ptr) => self.allocator.free(ptr.cast()),
+                        WorkerResponseBatch::Execution(ptr) => self.allocator.free(ptr.cast()),
+                    }
+                }
+            }
             Ordering::Less => {}
         }
 
