@@ -50,6 +50,7 @@ const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE
 const_assert!(TX_BATCH_SIZE < 4096);
 
 const CHECK_WORKER: usize = 0;
+const MAX_CHECK_BATCHES: usize = 8;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 
@@ -370,7 +371,9 @@ impl BatchScheduler {
     {
         // Loop until worker queue is filled or backlog is empty.
         let start_len = self.unchecked_tx.len();
-        while bridge.worker(0).rem() > 0 {
+        while bridge.worker(CHECK_WORKER).len() < MAX_CHECK_BATCHES
+            && bridge.worker(CHECK_WORKER).rem() > 0
+        {
             if self.unchecked_tx.is_empty() {
                 break;
             }
