@@ -157,6 +157,8 @@ impl BatchScheduler {
         //   - If a check flags a transaction as dead:
         //     - Remove from bindings.state.
         //     - Remove from Checked BTreeSet.
+        // - Re-queue checks for transactions only once per slot as its redundant to re-check
+        // (unless we are leader, then we can continuously re-check).
 
         // Drain responses from workers.
         self.drain_worker_responses(bridge);
