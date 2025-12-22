@@ -136,6 +136,27 @@ impl BatchScheduler {
         // TODO: Think about re-checking all TXs on slot roll (or at least
         // expired TXs). If we do this we should use a dense slotmap to make
         // iteration fast.
+        //
+        // Alternatively, it would be ideal if we could just drive the check worker at
+        // 100% utilization looping through our pending transactions.
+        //
+        // - Have 3 collections:
+        //   - Unchecked (MinMaxHeap of PriorityId)
+        //   - Rechecking (MinMaxHeap of PriorityId)
+        //   - Checked (BTreeSet of PriorityId)
+        // - Update bindings TransactionState to have the following fields:
+        //   - dead: flag indicating the transaction is about to be cleaned up.
+        //   - checks_in_flight: number of checks in flight.
+        // - The strategy for scheduling checks would then be as follows:
+        //   - Store a heap of unchecked transactions, pop highest priority until empty.
+        //   - Store a heap of checked transactions, pop highest priority until empty.
+        //     - When popping, check if the transaction has already been marked as dead,
+        //       if so skip over it.
+        //     - If not dead, send the transaction for checking, increment inflight
+        //       checks.
+        //   - If a check flags a transaction as dead:
+        //     - Remove from bindings.state.
+        //     - Remove from Checked BTreeSet.
 
         // Drain responses from workers.
         self.drain_worker_responses(bridge);

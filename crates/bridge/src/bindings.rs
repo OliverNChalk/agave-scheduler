@@ -193,6 +193,10 @@ where
         }
     }
 
+    // BUG: Should be unsafe as this does not enforce that the caller has not
+    // previously called schedule_batch with the underlying allocation.
+    // Alternatively, we need to refcount based on the messages we send/recv with
+    // agave.
     fn tx_drop(&mut self, key: TransactionKey) {
         let state = self.state.remove(key).unwrap();
         self.metrics.state_len.set(self.state.len() as f64);
