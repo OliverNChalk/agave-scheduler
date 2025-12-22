@@ -448,7 +448,7 @@ struct SchedulerBindingsMetrics {
 
 impl SchedulerBindingsMetrics {
     fn new() -> Self {
-        Self { state_len: gauge!("container_len", "var" => "state") }
+        Self { state_len: gauge!("container_len", "label" => "state") }
     }
 }
 
