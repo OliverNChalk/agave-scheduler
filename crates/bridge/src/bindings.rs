@@ -401,7 +401,6 @@ where
         ptrs.index += 1;
         match ptrs.index.cmp(&ptrs.len) {
             Ordering::Greater => unreachable!(),
-            // BUG: Need to free the response batch.
             Ordering::Equal => {
                 let ptrs = self.worker_response.take().unwrap();
 
