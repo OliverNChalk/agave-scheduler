@@ -13,6 +13,7 @@ use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
+use metrics::{Gauge, gauge};
 use rts_alloc::Allocator;
 use slotmap::SlotMap;
 use solana_fee::FeeFeatures;
@@ -33,6 +34,8 @@ pub struct SchedulerBindings<M> {
     runtime: RuntimeState,
     state: SlotMap<TransactionKey, TransactionState>,
     worker_response: Option<WorkerResponsePointers<M>>,
+
+    metrics: SchedulerBindingsMetrics,
 }
 
 impl<M> SchedulerBindings<M>
@@ -76,6 +79,8 @@ where
             },
             state: SlotMap::default(),
             worker_response: None,
+
+            metrics: SchedulerBindingsMetrics::new(),
         }
     }
 
@@ -169,7 +174,12 @@ where
 
         // Sanitize the transaction, drop it immediately if it fails sanitization.
         match SanitizedTransactionView::try_new_sanitized(tx, true) {
-            Ok(tx) => Ok(self.state.insert(TransactionState { data: tx, keys: None })),
+            Ok(tx) => {
+                let key = self.state.insert(TransactionState { data: tx, keys: None });
+                self.metrics.state_len.set(self.state.len() as f64);
+
+                Ok(key)
+            }
             Err(err) => {
                 // SAFETY:
                 // - We own `tx` exclusively.
@@ -185,6 +195,7 @@ where
 
     fn tx_drop(&mut self, key: TransactionKey) {
         let state = self.state.remove(key).unwrap();
+        self.metrics.state_len.set(self.state.len() as f64);
 
         if let Some(keys) = state.keys {
             // SAFETY
@@ -250,11 +261,13 @@ where
 
             // Get the ID so the caller can store it for later use.
             let key = self.state.insert(TransactionState { data: tx, keys: None });
+            self.metrics.state_len.set(self.state.len() as f64);
 
             // Remove & free the TX if the scheduler doesn't want it.
             if cb(self, key) == TxDecision::Drop {
                 let state = self.state.remove(key).unwrap();
                 assert!(state.keys.is_none());
+                self.metrics.state_len.set(self.state.len() as f64);
 
                 // SAFETY:
                 // - We own `tx` exclusively.
@@ -366,6 +379,7 @@ where
         // Remove the tx from state & drop the allocation if requested.
         if decision == TxDecision::Drop {
             let state = self.state.remove(key).unwrap();
+            self.metrics.state_len.set(self.state.len() as f64);
 
             if let Some(keys) = state.keys {
                 // SAFETY
@@ -426,6 +440,16 @@ where
             })
             .unwrap();
         queue.commit();
+    }
+}
+
+struct SchedulerBindingsMetrics {
+    state_len: Gauge,
+}
+
+impl SchedulerBindingsMetrics {
+    fn new() -> Self {
+        Self { state_len: gauge!("state_len") }
     }
 }
 
