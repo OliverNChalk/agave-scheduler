@@ -546,6 +546,10 @@ impl BatchScheduler {
         if parsing_failed || resolve_failed || status_failed {
             self.metrics.check_err.increment(1);
 
+            // NB: If we are re-checking then we must remove here, else we can just silently
+            // ignore the None returned by `remove()`.
+            self.checked_tx.remove(&meta);
+
             return TxDecision::Drop;
         }
 
