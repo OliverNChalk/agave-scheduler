@@ -157,9 +157,9 @@ impl BatchScheduler {
             self.schedule_execute(bridge);
 
             // Start another recheck if we are not currently performing one.
-            if self.next_recheck.is_none() {
-                self.next_recheck = self.checked_tx.last().copied();
-            }
+            self.next_recheck = self
+                .next_recheck
+                .or_else(|| self.checked_tx.last().copied());
         }
 
         // Update metrics.
