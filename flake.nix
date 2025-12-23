@@ -25,6 +25,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [ nats-server ];
+            nativeBuildInputs = with pkgs; [ protobuf ];
           };
         }
       );
