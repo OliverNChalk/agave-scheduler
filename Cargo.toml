@@ -8,6 +8,25 @@ edition = "2024"
 authors = ["Oliver Chalk"]
 license = "Apache-2.0"
 
+[profile.release]
+opt-level = 3
+debug = true
+
+[profile.paranoid]
+inherits = "release"
+overflow-checks = true
+debug-assertions = true
+
+[profile.paranoid.package."*"]
+overflow-checks = false
+debug-assertions = false
+
+[profile.performance]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+incremental = false
+
 [workspace.lints.clippy]
 cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"

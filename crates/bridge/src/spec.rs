@@ -96,6 +96,8 @@ slotmap::new_key_type! {
 
 #[derive(Debug)]
 pub struct TransactionState {
+    pub dead: bool,
+    pub borrows: u64,
     pub data: SanitizedTransactionView<TransactionPtr>,
     pub keys: Option<PubkeysPtr>,
 }
