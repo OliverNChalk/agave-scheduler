@@ -86,7 +86,7 @@ where
 
     fn collect_batch(
         allocator: &Allocator,
-        state: &SlotMap<TransactionKey, TransactionState>,
+        state: &mut SlotMap<TransactionKey, TransactionState>,
         batch: &[KeyedTransactionMeta<M>],
     ) -> SharableTransactionBatchRegion {
         assert!(batch.len() <= MAX_TRANSACTIONS_PER_MESSAGE);
@@ -111,7 +111,11 @@ where
 
         // Fill in the batch with transaction pointers.
         for (i, meta) in batch.iter().copied().enumerate() {
-            let tx = &state[meta.key];
+            let tx = &mut state[meta.key];
+            assert!(!tx.dead);
+
+            // We are sending a copy to Agave, we track this as a new borrow.
+            tx.borrows += 1;
 
             // SAFETY
             // - We have allocated the transaction batch to support at least
@@ -130,6 +134,25 @@ where
         SharableTransactionBatchRegion {
             num_transactions: batch.len().try_into().unwrap(),
             transactions_offset,
+        }
+    }
+
+    fn clean_up(&mut self, key: TransactionKey) {
+        let state = self.state.remove(key).unwrap();
+        self.metrics.state_len.set(self.state.len() as f64);
+
+        if let Some(keys) = state.keys {
+            // SAFETY
+            // - We own these pointers/allocations exclusively.
+            unsafe {
+                keys.free(&self.allocator);
+            }
+        }
+
+        // SAFETY
+        // - We own the allocation exclusively.
+        unsafe {
+            state.data.into_inner_data().free(&self.allocator);
         }
     }
 }
@@ -175,7 +198,12 @@ where
         // Sanitize the transaction, drop it immediately if it fails sanitization.
         match SanitizedTransactionView::try_new_sanitized(tx, true) {
             Ok(tx) => {
-                let key = self.state.insert(TransactionState { data: tx, keys: None });
+                let key = self.state.insert(TransactionState {
+                    dead: false,
+                    borrows: 0,
+                    data: tx,
+                    keys: None,
+                });
                 self.metrics.state_len.set(self.state.len() as f64);
 
                 Ok(key)
@@ -193,26 +221,12 @@ where
         }
     }
 
-    // BUG: Should be unsafe as this does not enforce that the caller has not
-    // previously called schedule_batch with the underlying allocation.
-    // Alternatively, we need to refcount based on the messages we send/recv with
-    // agave.
     fn tx_drop(&mut self, key: TransactionKey) {
-        let state = self.state.remove(key).unwrap();
-        self.metrics.state_len.set(self.state.len() as f64);
-
-        if let Some(keys) = state.keys {
-            // SAFETY
-            // - We own these pointers/allocations exclusively.
-            unsafe {
-                keys.free(&self.allocator);
-            }
-        }
-
-        // SAFETY
-        // - We own the allocation exclusively.
-        unsafe {
-            state.data.into_inner_data().free(&self.allocator);
+        // If we have requests that have borrowed this shared transaction region, then
+        // we can't immediately clean up and must instead flag it as dead.
+        match self.state[key].borrows {
+            0 => self.clean_up(key),
+            _ => self.state[key].dead = true,
         }
     }
 
@@ -264,7 +278,12 @@ where
             };
 
             // Get the ID so the caller can store it for later use.
-            let key = self.state.insert(TransactionState { data: tx, keys: None });
+            let key = self.state.insert(TransactionState {
+                dead: false,
+                borrows: 0,
+                data: tx,
+                keys: None,
+            });
             self.metrics.state_len.set(self.state.len() as f64);
 
             // Remove & free the TX if the scheduler doesn't want it.
@@ -339,6 +358,18 @@ where
         // SAFETY
         // - We took care to allocate these correctly originally.
         let KeyedTransactionMeta { key, meta } = unsafe { ptrs.metas.add(ptrs.index).read() };
+
+        // Decrease the borrow counter as Agave has returned ownership to use.
+        let state = &mut self.state[key];
+        state.borrows -= 1;
+
+        // Check if this transaction has been previously dropped before notifying the
+        // scheduler.
+        if state.dead {
+            self.clean_up(key);
+
+            return true;
+        }
 
         let decision = match ptrs.responses {
             WorkerResponseBatch::Unprocessed => {
@@ -439,7 +470,7 @@ where
             .try_write(PackToWorkerMessage {
                 flags,
                 max_working_slot,
-                batch: Self::collect_batch(&self.allocator, &self.state, batch),
+                batch: Self::collect_batch(&self.allocator, &mut self.state, batch),
             })
             .unwrap();
         queue.commit();
