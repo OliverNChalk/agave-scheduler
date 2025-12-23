@@ -136,53 +136,6 @@ impl BatchScheduler {
         // Drain the progress tracker & check for roll.
         self.check_slot_roll(bridge);
 
-        // TODO: Think about re-checking all TXs on slot roll (or at least
-        // expired TXs). If we do this we should use a dense slotmap to make
-        // iteration fast.
-        //
-        // Alternatively, it would be ideal if we could just drive the check worker at
-        // 100% utilization looping through our pending transactions.
-        //
-        // - Have 3 collections:
-        //   - Unchecked (MinMaxHeap of PriorityId)
-        //   - Rechecking (MinMaxHeap of PriorityId)
-        //   - Checked (BTreeSet of PriorityId)
-        // - Update bindings TransactionState to have the following fields:
-        //   - dead: flag indicating the transaction is about to be cleaned up.
-        //   - checks_in_flight: number of checks in flight.
-        // - The strategy for scheduling checks would then be as follows:
-        //   - Store a heap of unchecked transactions, pop highest priority until empty.
-        //   - Store a heap of checked transactions, pop highest priority until empty.
-        //     - When popping, check if the transaction has already been marked as dead,
-        //       if so skip over it.
-        //     - If not dead, send the transaction for checking, increment inflight
-        //       checks.
-        //   - If a check flags a transaction as dead:
-        //     - Remove from bindings.state.
-        //     - Remove from Checked BTreeSet.
-        // - Re-queue checks for transactions only once per slot as its redundant to
-        //   re-check
-        // (unless we are leader, then we can continuously re-check).
-        //
-        // STRATEGY EVEN GOODER VERSION:
-        //
-        // - Store unchecked transactions in a MinMaxHeap.
-        // - Store checked transactions in a BTreeSet<PriorityId>.
-        //
-        // - Loop:
-        //   - Pop all unchecked transactions.
-        //   - Progress the check transactions iterator until exhausted.
-        //     - If currently the leader, immeidiately refresh the iterator.
-        //     - If not currently the leader, refresh the iterator on slot roll.
-        //     - The check iterator uses BTreeMap::range() to remember where it's
-        //       already scheduled up to across polls.
-        //   - If a check passes: DO NOTHING
-        //   - If a check fails:
-        //     - bindings.tx_drop() => will mark dead or instant drop it.
-        //     - remove the priority ID from the checked BTreeMap if it exists.
-        // - Execution process as normal but it removes from the BTreeMap when
-        //   scheduling.
-
         // Drain responses from workers.
         self.drain_worker_responses(bridge);
 
