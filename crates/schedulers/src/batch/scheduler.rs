@@ -393,13 +393,11 @@ impl BatchScheduler {
 
                 // Re-check already checked transactions if we have remaining.
                 if let Some(curr) = self.next_recheck.take() {
-                    if let Some(next) = self
+                    self.next_recheck = self
                         .checked_tx
                         .range((Bound::Unbounded, Bound::Excluded(curr)))
                         .next_back()
-                    {
-                        self.next_recheck = Some(*next);
-                    }
+                        .copied();
 
                     return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
                 }
