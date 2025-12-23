@@ -136,25 +136,6 @@ where
             transactions_offset,
         }
     }
-
-    fn clean_up(&mut self, key: TransactionKey) {
-        let state = self.state.remove(key).unwrap();
-        self.metrics.state_len.set(self.state.len() as f64);
-
-        if let Some(keys) = state.keys {
-            // SAFETY
-            // - We own these pointers/allocations exclusively.
-            unsafe {
-                keys.free(&self.allocator);
-            }
-        }
-
-        // SAFETY
-        // - We own the allocation exclusively.
-        unsafe {
-            state.data.into_inner_data().free(&self.allocator);
-        }
-    }
 }
 
 impl<M> Bridge for SchedulerBindings<M>
@@ -225,7 +206,24 @@ where
         // If we have requests that have borrowed this shared transaction region, then
         // we can't immediately clean up and must instead flag it as dead.
         match self.state[key].borrows {
-            0 => self.clean_up(key),
+            0 => {
+                let state = self.state.remove(key).unwrap();
+                self.metrics.state_len.set(self.state.len() as f64);
+
+                if let Some(keys) = state.keys {
+                    // SAFETY
+                    // - We own these pointers/allocations exclusively.
+                    unsafe {
+                        keys.free(&self.allocator);
+                    }
+                }
+
+                // SAFETY
+                // - We own the allocation exclusively.
+                unsafe {
+                    state.data.into_inner_data().free(&self.allocator);
+                }
+            }
             _ => self.state[key].dead = true,
         }
     }
@@ -367,7 +365,7 @@ where
         // Check if this transaction has been previously dropped before notifying the
         // scheduler.
         if state.dead {
-            self.clean_up(key);
+            self.tx_drop(key);
 
             return true;
         }
