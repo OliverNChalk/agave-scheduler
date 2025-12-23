@@ -362,21 +362,15 @@ where
         let state = &mut self.state[key];
         state.borrows -= 1;
 
-        // Check if this transaction has been previously dropped before notifying the
-        // scheduler.
-        if state.dead {
-            self.tx_drop(key);
-
-            return true;
-        }
-
-        let decision = match ptrs.responses {
-            WorkerResponseBatch::Unprocessed => {
+        // Only callback if this state is not already dead (scheduler requested drop).
+        let decision = match (state.dead, &ptrs.responses) {
+            (true, _) => TxDecision::Drop,
+            (false, WorkerResponseBatch::Unprocessed) => {
                 let rep = WorkerResponse { key, meta, response: WorkerAction::Unprocessed };
 
                 cb(self, rep)
             }
-            WorkerResponseBatch::Execution(rep) => {
+            (false, WorkerResponseBatch::Execution(rep)) => {
                 // SAFETY
                 // - We trust Agave to have correctly allocated the responses.
                 let rep = unsafe { rep.add(ptrs.index).read() };
@@ -384,7 +378,7 @@ where
 
                 cb(self, rep)
             }
-            WorkerResponseBatch::Check(rep) => {
+            (false, WorkerResponseBatch::Check(rep)) => {
                 // SAFETY
                 // - We trust Agave to have correctly allocated the responses.
                 let rep = unsafe { rep.add(ptrs.index).read() };
