@@ -157,8 +157,27 @@ impl BatchScheduler {
         //   - If a check flags a transaction as dead:
         //     - Remove from bindings.state.
         //     - Remove from Checked BTreeSet.
-        // - Re-queue checks for transactions only once per slot as its redundant to re-check
+        // - Re-queue checks for transactions only once per slot as its redundant to
+        //   re-check
         // (unless we are leader, then we can continuously re-check).
+        //
+        // STRATEGY EVEN GOODER VERSION:
+        //
+        // - Store unchecked transactions in a MinMaxHeap.
+        //
+        // - Loop:
+        //   - Pop all unchecked transactions.
+        //   - Progress the check transactions iterator until exhausted.
+        //     - If currently the leader, immeidiately refresh the iterator.
+        //     - If not currently the leader, refresh the iterator on slot roll.
+        //     - The check iterator uses BTreeMap::range() to remember where it's
+        //       already scheduled up to across polls.
+        //   - If a check passes: DO NOTHING
+        //   - If a check fails:
+        //     - bindings.tx_drop() => will mark dead or instant drop it.
+        //     - remove the priority ID from the checked BTreeMap if it exists.
+        // - Execution process as normal but it removes from the BTreeMap when
+        //   scheduling.
 
         // Drain responses from workers.
         self.drain_worker_responses(bridge);

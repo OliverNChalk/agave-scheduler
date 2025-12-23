@@ -290,6 +290,7 @@ where
             if cb(self, key) == TxDecision::Drop {
                 let state = self.state.remove(key).unwrap();
                 assert!(state.keys.is_none());
+                assert_eq!(state.borrows, 0);
                 self.metrics.state_len.set(self.state.len() as f64);
 
                 // SAFETY:
@@ -413,22 +414,7 @@ where
 
         // Remove the tx from state & drop the allocation if requested.
         if decision == TxDecision::Drop {
-            let state = self.state.remove(key).unwrap();
-            self.metrics.state_len.set(self.state.len() as f64);
-
-            if let Some(keys) = state.keys {
-                // SAFETY
-                // - We own these pointers/allocations exclusively.
-                unsafe {
-                    keys.free(&self.allocator);
-                }
-            }
-
-            // SAFETY
-            // - We own `tx` exclusively.
-            unsafe {
-                state.data.into_inner_data().free(&self.allocator);
-            };
+            self.tx_drop(key);
         }
 
         // Increment the index & clear if we have exhausted all responses.
