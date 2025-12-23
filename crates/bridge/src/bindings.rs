@@ -358,7 +358,7 @@ where
         // - We took care to allocate these correctly originally.
         let KeyedTransactionMeta { key, meta } = unsafe { ptrs.metas.add(ptrs.index).read() };
 
-        // Decrease the borrow counter as Agave has returned ownership to use.
+        // Decrease the borrow counter as Agave has returned ownership to us.
         let state = &mut self.state[key];
         state.borrows -= 1;
 
