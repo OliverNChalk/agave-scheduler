@@ -208,8 +208,10 @@ impl BatchScheduler {
         self.slot = progress.current_slot;
         self.slot_event.is_leader = progress.leader_state == IS_LEADER;
 
-        // Trigger a recheck of all checked transactions.
-        self.next_recheck = self.checked_tx.last().copied();
+        // Start another recheck if we are not currently performing one.
+        self.next_recheck = self
+            .next_recheck
+            .or_else(|| self.checked_tx.last().copied());
 
         // If we have transitioned to being the leader, we must configure our tip
         // accounts.
