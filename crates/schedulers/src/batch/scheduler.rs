@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
+use std::ops::Bound;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -73,7 +74,8 @@ pub struct BatchScheduler {
     // TODO: Bundles should be sorted against transactions.
     bundles: VecDeque<Vec<TransactionKey>>,
     unchecked_tx: MinMaxHeap<PriorityId>,
-    checked_tx: MinMaxHeap<PriorityId>,
+    checked_tx: BTreeSet<PriorityId>,
+    next_recheck: Option<PriorityId>,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
@@ -112,7 +114,8 @@ impl BatchScheduler {
                 recent_blockhash: Hash::default(),
                 bundles: VecDeque::new(),
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                checked_tx: MinMaxHeap::with_capacity(CHECKED_CAPACITY),
+                checked_tx: BTreeSet::new(),
+                next_recheck: None,
                 cu_in_flight: 0,
                 schedule_locks: HashMap::new(),
                 schedule_batch: Vec::new(),
@@ -164,6 +167,7 @@ impl BatchScheduler {
         // STRATEGY EVEN GOODER VERSION:
         //
         // - Store unchecked transactions in a MinMaxHeap.
+        // - Store checked transactions in a BTreeSet<PriorityId>.
         //
         // - Loop:
         //   - Pop all unchecked transactions.
@@ -198,6 +202,11 @@ impl BatchScheduler {
         // Schedule if we're currently the leader.
         if is_leader {
             self.schedule_execute(bridge);
+
+            // Start another recheck if we are not currently performing one.
+            if self.next_recheck.is_none() {
+                self.next_recheck = self.checked_tx.last().copied();
+            }
         }
 
         // Update metrics.
@@ -245,6 +254,9 @@ impl BatchScheduler {
         // Update our local state.
         self.slot = progress.current_slot;
         self.slot_event.is_leader = progress.leader_state == IS_LEADER;
+
+        // Trigger a recheck of all checked transactions.
+        self.next_recheck = self.checked_tx.last().copied();
 
         // If we have transitioned to being the leader, we must configure our tip
         // accounts.
@@ -416,19 +428,35 @@ impl BatchScheduler {
         while bridge.worker(CHECK_WORKER).len() < MAX_CHECK_BATCHES
             && bridge.worker(CHECK_WORKER).rem() > 0
         {
-            if self.unchecked_tx.is_empty() {
+            if self.unchecked_tx.is_empty() && self.next_recheck.is_none() {
                 break;
             }
 
+            let pop_next = || {
+                // Prioritize unchecked transactions.
+                if let Some(id) = self.unchecked_tx.pop_max() {
+                    return Some(KeyedTransactionMeta { key: id.key, meta: id });
+                }
+
+                // Re-check already checked transactions if we have remaining.
+                if let Some(curr) = self.next_recheck.take() {
+                    if let Some(next) = self
+                        .checked_tx
+                        .range((Bound::Excluded(curr), Bound::Unbounded))
+                        .next()
+                    {
+                        self.next_recheck = Some(*next);
+                    }
+
+                    return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
+                }
+
+                None
+            };
+
             self.schedule_batch.clear();
-            self.schedule_batch.extend(
-                std::iter::from_fn(|| {
-                    self.unchecked_tx
-                        .pop_max()
-                        .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
-                })
-                .take(TARGET_BATCH_SIZE),
-            );
+            self.schedule_batch
+                .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
                 transactions: &self.schedule_batch,
@@ -493,11 +521,11 @@ impl BatchScheduler {
 
             let pop_next = || {
                 self.checked_tx
-                    .pop_max()
+                    .pop_last()
                     .filter(|id| {
                         // Check if we can fit the TX within our budget.
                         if u64::from(id.cost) > budget_remaining {
-                            self.checked_tx.push(*id);
+                            self.checked_tx.insert(*id);
 
                             return false;
                         }
@@ -514,7 +542,7 @@ impl BatchScheduler {
                                     .is_some_and(|writable| writable)
                             })
                         {
-                            self.checked_tx.push(*id);
+                            self.checked_tx.insert(*id);
                             budget_remaining = 0;
 
                             return false;
@@ -584,7 +612,7 @@ impl BatchScheduler {
 
         // Evict lowest priority if at capacity.
         if self.checked_tx.len() == CHECKED_CAPACITY {
-            let id = self.checked_tx.pop_min().unwrap();
+            let id = self.checked_tx.pop_first().unwrap();
             bridge.tx_drop(id.key);
 
             self.metrics.check_evict.increment(1);
@@ -592,7 +620,7 @@ impl BatchScheduler {
 
         // Insert the new transaction (yes this may be lower priority then what
         // we just evicted but that's fine).
-        self.checked_tx.push(meta);
+        self.checked_tx.insert(meta);
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);
