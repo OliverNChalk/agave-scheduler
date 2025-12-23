@@ -395,8 +395,8 @@ impl BatchScheduler {
                 if let Some(curr) = self.next_recheck.take() {
                     if let Some(next) = self
                         .checked_tx
-                        .range((Bound::Excluded(curr), Bound::Unbounded))
-                        .next()
+                        .range((Bound::Unbounded, Bound::Excluded(curr)))
+                        .next_back()
                     {
                         self.next_recheck = Some(*next);
                     }
