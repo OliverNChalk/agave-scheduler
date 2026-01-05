@@ -394,14 +394,18 @@ impl BatchScheduler {
                 }
 
                 // Re-check already checked transactions if we have remaining.
-                if let Some(curr) = self.next_recheck.take() {
+                while let Some(curr) = self.next_recheck.take() {
                     self.next_recheck = self
                         .checked_tx
                         .range((Bound::Unbounded, Bound::Excluded(curr)))
                         .next_back()
                         .copied();
 
-                    return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
+                    // NB: If the check transaction gets scheduled/removed while we are iterating
+                    // through checks we could access a stale `SlotKey`.
+                    if self.checked_tx.contains(&curr) {
+                        return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
+                    }
                 }
 
                 None
