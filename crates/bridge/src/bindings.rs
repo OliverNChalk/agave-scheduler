@@ -342,7 +342,7 @@ where
                     (processed_codes::MAX_WORKING_SLOT_EXCEEDED, _) => {
                         WorkerResponseBatch::Unprocessed
                     }
-                    _ => panic!(),
+                    _ => panic!("Unexpected response; rep={rep:?}"),
                 };
 
                 self.worker_response.insert(WorkerResponsePointers {
