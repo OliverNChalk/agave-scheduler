@@ -173,6 +173,12 @@ where
             .allocate(tx.len().try_into().unwrap())
             .unwrap();
         // SAFETY:
+        // - We own this pointer exclusively.
+        // - The allocated region is at least `tx.len()` bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(tx.as_ptr(), ptr.as_ptr(), tx.len());
+        }
+        // SAFETY:
         // - We own this pointer and the size is correct.
         let tx = unsafe { TransactionPtr::from_raw_parts(ptr, tx.len()) };
 
