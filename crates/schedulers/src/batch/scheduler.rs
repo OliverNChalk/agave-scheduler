@@ -385,10 +385,6 @@ impl BatchScheduler {
         while bridge.worker(CHECK_WORKER).len() < MAX_CHECK_BATCHES
             && bridge.worker(CHECK_WORKER).rem() > 0
         {
-            if self.unchecked_tx.is_empty() && self.next_recheck.is_none() {
-                break;
-            }
-
             let pop_next = || {
                 // Prioritize unchecked transactions.
                 if let Some(id) = self.unchecked_tx.pop_max() {
@@ -415,9 +411,16 @@ impl BatchScheduler {
                 None
             };
 
+            // Build the next batch.
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
+
+            // If we built an empty batch we are done.
+            if self.schedule_batch.is_empty() {
+                break;
+            }
+
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
                 transactions: &self.schedule_batch,
