@@ -18,7 +18,7 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
 use solana_clock::{DEFAULT_SLOTS_PER_EPOCH, Slot};
@@ -75,6 +75,7 @@ pub struct BatchScheduler {
     bundles: VecDeque<Vec<TransactionKey>>,
     unchecked_tx: MinMaxHeap<PriorityId>,
     checked_tx: BTreeSet<PriorityId>,
+    executing_tx: HashSet<TransactionKey>,
     next_recheck: Option<PriorityId>,
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
@@ -115,6 +116,7 @@ impl BatchScheduler {
                 bundles: VecDeque::new(),
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked_tx: BTreeSet::new(),
+                executing_tx: HashSet::new(),
                 next_recheck: None,
                 cu_in_flight: 0,
                 schedule_locks: HashMap::new(),
@@ -383,10 +385,6 @@ impl BatchScheduler {
         while bridge.worker(CHECK_WORKER).len() < MAX_CHECK_BATCHES
             && bridge.worker(CHECK_WORKER).rem() > 0
         {
-            if self.unchecked_tx.is_empty() && self.next_recheck.is_none() {
-                break;
-            }
-
             let pop_next = || {
                 // Prioritize unchecked transactions.
                 if let Some(id) = self.unchecked_tx.pop_max() {
@@ -401,19 +399,28 @@ impl BatchScheduler {
                         .next_back()
                         .copied();
 
-                    // NB: If the check transaction gets scheduled/removed while we are iterating
-                    // through checks we could access a stale `SlotKey`.
-                    if self.checked_tx.contains(&curr) {
-                        return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
+                    // Skip if transaction was removed from checked_tx (e.g., scheduled for
+                    // execution) or is currently executing.
+                    if !self.checked_tx.contains(&curr) || self.executing_tx.contains(&curr.key) {
+                        continue;
                     }
+
+                    return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
                 }
 
                 None
             };
 
+            // Build the next batch.
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
+
+            // If we built an empty batch we are done.
+            if self.schedule_batch.is_empty() {
+                break;
+            }
+
             bridge.schedule(ScheduleBatch {
                 worker: CHECK_WORKER,
                 transactions: &self.schedule_batch,
@@ -509,6 +516,9 @@ impl BatchScheduler {
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
                         self.cu_in_flight += id.cost;
 
+                        // Track that this transaction is now executing.
+                        self.executing_tx.insert(id.key);
+
                         true
                     })
                     .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
@@ -571,7 +581,23 @@ impl BatchScheduler {
         assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
         assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
 
-        // Evict lowest priority if at capacity.
+        // Don't insert if transaction is currently executing. This can happen when a
+        // recheck returns after execution was scheduled but before it completed.
+        // Execution will handle cleanup.
+        if self.executing_tx.contains(&meta.key) {
+            self.metrics.check_ok.increment(1);
+
+            return TxDecision::Keep;
+        }
+
+        // If already in checked_tx, this is a recheck completing - nothing to do.
+        if self.checked_tx.contains(&meta) {
+            self.metrics.check_ok.increment(1);
+
+            return TxDecision::Keep;
+        }
+
+        // First check. Evict lowest priority if at capacity.
         if self.checked_tx.len() == CHECKED_CAPACITY {
             let id = self.checked_tx.pop_first().unwrap();
             bridge.tx_drop(id.key);
@@ -579,7 +605,7 @@ impl BatchScheduler {
             self.metrics.check_evict.increment(1);
         }
 
-        // Insert the new transaction (yes this may be lower priority then what
+        // Insert the new transaction (yes this may be lower priority than what
         // we just evicted but that's fine).
         self.checked_tx.insert(meta);
 
@@ -590,6 +616,9 @@ impl BatchScheduler {
     }
 
     fn on_execute(&mut self, meta: PriorityId, rep: ExecutionResponse) -> TxDecision {
+        // Remove from executing set now that execution is complete.
+        self.executing_tx.remove(&meta.key);
+
         // Remove in-flight costs.
         self.cu_in_flight -= meta.cost;
 

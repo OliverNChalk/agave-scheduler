@@ -173,6 +173,12 @@ where
             .allocate(tx.len().try_into().unwrap())
             .unwrap();
         // SAFETY:
+        // - We own this pointer exclusively.
+        // - The allocated region is at least `tx.len()` bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(tx.as_ptr(), ptr.as_ptr(), tx.len());
+        }
+        // SAFETY:
         // - We own this pointer and the size is correct.
         let tx = unsafe { TransactionPtr::from_raw_parts(ptr, tx.len()) };
 
@@ -315,7 +321,6 @@ where
                 self.workers[worker].0.worker_to_pack.finalize();
 
                 // Get transaction & meta pointers.
-                assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
                 let transactions = self
                     .allocator
                     .ptr_from_offset(rep.batch.transactions_offset)
@@ -326,6 +331,10 @@ where
 
                 let responses = match (rep.processed_code, rep.responses.tag) {
                     (processed_codes::PROCESSED, worker_message_types::EXECUTION_RESPONSE) => {
+                        assert_eq!(
+                            rep.batch.num_transactions,
+                            rep.responses.num_transaction_responses
+                        );
                         WorkerResponseBatch::Execution(
                             self.allocator
                                 .ptr_from_offset(rep.responses.transaction_responses_offset)
@@ -333,6 +342,10 @@ where
                         )
                     }
                     (processed_codes::PROCESSED, worker_message_types::CHECK_RESPONSE) => {
+                        assert_eq!(
+                            rep.batch.num_transactions,
+                            rep.responses.num_transaction_responses
+                        );
                         WorkerResponseBatch::Check(
                             self.allocator
                                 .ptr_from_offset(rep.responses.transaction_responses_offset)
@@ -342,7 +355,7 @@ where
                     (processed_codes::MAX_WORKING_SLOT_EXCEEDED, _) => {
                         WorkerResponseBatch::Unprocessed
                     }
-                    _ => panic!(),
+                    _ => panic!("Unexpected response; rep={rep:?}"),
                 };
 
                 self.worker_response.insert(WorkerResponsePointers {
