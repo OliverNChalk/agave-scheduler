@@ -234,12 +234,17 @@ where
         }
     }
 
-    fn drain_progress(&mut self) {
+    fn drain_progress(&mut self) -> Option<ProgressMessage> {
         self.progress_tracker.sync();
+
+        let mut received = false;
         while let Some(msg) = self.progress_tracker.try_read() {
             self.progress = *msg;
+            received = true;
         }
         self.progress_tracker.finalize();
+
+        received.then_some(self.progress)
     }
 
     fn tpu_len(&mut self) -> usize {

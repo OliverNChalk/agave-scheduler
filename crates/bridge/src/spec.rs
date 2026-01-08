@@ -26,7 +26,7 @@ pub trait Bridge {
 
     fn tx_drop(&mut self, key: TransactionKey);
 
-    fn drain_progress(&mut self);
+    fn drain_progress(&mut self) -> Option<ProgressMessage>;
 
     fn tpu_len(&mut self) -> usize;
 

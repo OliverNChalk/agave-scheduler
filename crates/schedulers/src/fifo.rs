@@ -34,7 +34,7 @@ impl FifoScheduler {
         B: Bridge<Meta = ()>,
     {
         // Drain the progress tracker so we know which slot we're on.
-        bridge.drain_progress();
+        let _ = bridge.drain_progress();
 
         // Drain check responses.
         while bridge.pop_worker(CHECK_WORKER, |_, WorkerResponse { key, response, .. }| {

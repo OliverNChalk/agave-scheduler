@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::ops::Bound;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agave_bridge::{
     Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
@@ -54,6 +54,7 @@ const CHECK_WORKER: usize = 0;
 const MAX_CHECK_BATCHES: usize = 8;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
+const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub struct BatchSchedulerArgs {
@@ -80,6 +81,7 @@ pub struct BatchScheduler {
     cu_in_flight: u32,
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
+    last_progress_time: Instant,
 
     events: Option<EventEmitter>,
     slot: Slot,
@@ -121,6 +123,7 @@ impl BatchScheduler {
                 cu_in_flight: 0,
                 schedule_locks: HashMap::new(),
                 schedule_batch: Vec::new(),
+                last_progress_time: Instant::now(),
 
                 events,
                 slot: 0,
@@ -185,8 +188,18 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        bridge.drain_progress();
+        // Drain progress and check for disconnect.
+        match bridge.drain_progress() {
+            Some(_) => self.last_progress_time = Instant::now(),
+            None => assert!(
+                self.last_progress_time.elapsed() < PROGRESS_TIMEOUT,
+                "Agave disconnected; elapsed={:?}; slot={}",
+                self.last_progress_time.elapsed(),
+                self.slot,
+            ),
+        }
 
+        // Check for slot roll.
         let was_leader = self.slot_event.is_leader;
         let progress = bridge.progress();
         if self.slot == progress.current_slot {

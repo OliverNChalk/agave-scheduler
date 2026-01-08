@@ -185,12 +185,14 @@ where
         self.state.remove(key).unwrap();
     }
 
-    fn drain_progress(&mut self) {
-        if let Some(progress) = self.progress_queue.back() {
-            self.progress = *progress;
+    fn drain_progress(&mut self) -> Option<ProgressMessage> {
+        let latest = self.progress_queue.back().copied();
+        if let Some(progress) = latest {
+            self.progress = progress;
         }
-
         self.progress_queue.clear();
+
+        latest
     }
 
     fn tpu_len(&mut self) -> usize {

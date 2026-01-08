@@ -75,7 +75,7 @@ impl GreedyScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         // Drain the progress tracker & check for roll.
-        bridge.drain_progress();
+        let _ = bridge.drain_progress();
         self.check_slot_roll(bridge);
 
         // TODO: Think about re-checking all TXs on slot roll (or at least
