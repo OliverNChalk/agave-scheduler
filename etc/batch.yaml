@@ -1,0 +1,14 @@
+---
+host_name: "dev"
+nats_servers:
+  - "127.0.0.1"
+scheduler: !Batch
+  keypair_path: ./keys/identity.json
+  tip:
+    vote_account: "5cJyfCLBfghRtoCuVJNreJgNCStqXLrhHmRhSRYtbgtr"
+    merkle_authority: "8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt"
+    commission_bps: 10000
+  jito:
+    http_rpc: "http://127.0.0.1:8899"
+    ws_rpc: "ws://127.0.0.1:8900"
+    block_engine: "https://mainnet.block-engine.jito.wtf"

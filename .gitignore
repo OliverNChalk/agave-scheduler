@@ -1,6 +1,7 @@
 /*.log
 /*.txt
 /.direnv
+/keys
 /logs
 /result
 /target
