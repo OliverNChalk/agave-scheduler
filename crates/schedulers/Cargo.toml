@@ -48,7 +48,8 @@ hashbrown.workspace = true
 jito-protos = { workspace = true, optional = true }
 metrics.workspace = true
 min-max-heap.workspace = true
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_with.workspace = true
 solana-clock.workspace = true
 solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
 solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
@@ -64,6 +65,7 @@ solana-rpc-client = { workspace = true, optional = true }
 solana-rpc-client-types = { workspace = true, optional = true }
 solana-runtime-transaction = { workspace = true, features = ["agave-unstable-api"] }
 solana-sdk-ids = { workspace = true, optional = true }
+solana-signature.workspace = true
 solana-svm-transaction.workspace = true
 solana-transaction.workspace = true
 static_assertions.workspace = true
@@ -78,6 +80,7 @@ agave-bridge = { workspace = true, features = ["testing"] }
 bincode.workspace = true
 expect-test.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 solana-compute-budget-interface.workspace = true
 solana-hash.workspace = true
 solana-keypair.workspace = true
