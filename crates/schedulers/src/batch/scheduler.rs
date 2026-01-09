@@ -458,7 +458,11 @@ impl BatchScheduler {
         self.schedule_locks.clear();
 
         // TEMP: Schedule all bundles.
-        while let Some(bundle) = self.bundles.pop_front() {
+        for _ in 0..bridge.worker(1).rem() {
+            let Some(bundle) = self.bundles.pop_front() else {
+                break;
+            };
+
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(bundle.iter().map(|key| KeyedTransactionMeta {
