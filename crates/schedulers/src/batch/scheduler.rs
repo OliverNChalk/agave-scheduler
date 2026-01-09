@@ -787,9 +787,8 @@ impl BatchScheduler {
     {
         let Some(events) = &self.events else { return };
 
-        let signature = bridge.tx(key).data.signatures()[0];
         events.emit(Event::Transaction(TransactionEvent {
-            signature,
+            signature: bridge.tx(key).data.signatures()[0],
             bundle,
             slot: self.slot,
             priority,
