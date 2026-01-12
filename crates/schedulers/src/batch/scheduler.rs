@@ -408,18 +408,16 @@ impl BatchScheduler {
         }
 
         // Emit ingest events for bundle transactions.
-        if self.events.is_some() {
-            let bundle_sig = bridge.tx(keys[0]).data.signatures()[0];
-            let bundle_id = Arc::new(bundle_sig.to_string());
-            for &key in &keys {
-                self.emit_tx_event(
-                    bridge,
-                    key,
-                    u64::MAX,
-                    Some(bundle_id.clone()),
-                    TransactionAction::Ingest { source: TransactionSource::Jito },
-                );
-            }
+        let bundle_sig = bridge.tx(keys[0]).data.signatures()[0];
+        let bundle_id = Arc::new(bundle_sig.to_string());
+        for &key in &keys {
+            self.emit_tx_event(
+                bridge,
+                key,
+                u64::MAX,
+                Some(bundle_id.clone()),
+                TransactionAction::Ingest { source: TransactionSource::Jito },
+            );
         }
 
         self.metrics.recv_bundle_ok.increment(1);
