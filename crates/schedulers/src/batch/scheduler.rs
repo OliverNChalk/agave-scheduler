@@ -314,7 +314,6 @@ impl BatchScheduler {
                 bridge,
                 id.key,
                 id.priority,
-                None,
                 TransactionAction::Evict { reason: EvictReason::UncheckedCapacity },
             );
             bridge.tx_drop(id.key);
@@ -331,8 +330,7 @@ impl BatchScheduler {
                         bridge,
                         key,
                         priority,
-                        None,
-                        TransactionAction::Ingest { source: TransactionSource::Tpu },
+                        TransactionAction::Ingest { source: TransactionSource::Tpu, bundle: None },
                     );
                     self.metrics.recv_tpu_ok.increment(1);
 
@@ -380,8 +378,7 @@ impl BatchScheduler {
                     bridge,
                     key,
                     priority,
-                    None,
-                    TransactionAction::Ingest { source: TransactionSource::Jito },
+                    TransactionAction::Ingest { source: TransactionSource::Jito, bundle: None },
                 );
             }
             None => bridge.tx_drop(key),
@@ -415,8 +412,10 @@ impl BatchScheduler {
                 bridge,
                 key,
                 u64::MAX,
-                Some(bundle_id.clone()),
-                TransactionAction::Ingest { source: TransactionSource::Jito },
+                TransactionAction::Ingest {
+                    source: TransactionSource::Jito,
+                    bundle: Some(bundle_id.clone()),
+                },
             );
         }
 
@@ -587,13 +586,7 @@ impl BatchScheduler {
 
             // Emit ExecuteReq events.
             for tx in &self.schedule_batch {
-                self.emit_tx_event(
-                    bridge,
-                    tx.key,
-                    tx.meta.priority,
-                    None,
-                    TransactionAction::ExecuteReq,
-                );
+                self.emit_tx_event(bridge, tx.key, tx.meta.priority, TransactionAction::ExecuteReq);
             }
 
             // Update metrics.
@@ -631,7 +624,6 @@ impl BatchScheduler {
                 bridge,
                 meta.key,
                 meta.priority,
-                None,
                 TransactionAction::CheckErr { reason },
             );
             self.metrics.check_err.increment(1);
@@ -680,7 +672,6 @@ impl BatchScheduler {
                 bridge,
                 id.key,
                 id.priority,
-                None,
                 TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
             );
             bridge.tx_drop(id.key);
@@ -691,7 +682,7 @@ impl BatchScheduler {
         // Insert the new transaction (yes this may be lower priority than what
         // we just evicted but that's fine).
         self.checked_tx.insert(meta);
-        self.emit_tx_event(bridge, meta.key, meta.priority, None, TransactionAction::CheckOk);
+        self.emit_tx_event(bridge, meta.key, meta.priority, TransactionAction::CheckOk);
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);
@@ -717,7 +708,7 @@ impl BatchScheduler {
                 &self.metrics.execute_err,
             ),
         };
-        self.emit_tx_event(bridge, meta.key, meta.priority, None, action);
+        self.emit_tx_event(bridge, meta.key, meta.priority, action);
         metric.increment(1);
 
         TxDecision::Drop
@@ -776,7 +767,6 @@ impl BatchScheduler {
         bridge: &B,
         key: TransactionKey,
         priority: u64,
-        bundle: Option<Arc<String>>,
         action: TransactionAction,
     ) where
         B: Bridge<Meta = PriorityId>,
@@ -785,7 +775,6 @@ impl BatchScheduler {
 
         events.emit(Event::Transaction(TransactionEvent {
             signature: bridge.tx(key).data.signatures()[0],
-            bundle,
             slot: self.slot,
             priority,
             action,

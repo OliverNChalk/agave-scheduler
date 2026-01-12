@@ -29,7 +29,6 @@ pub enum Event {
 pub struct TransactionEvent {
     #[serde_as(as = "serde_with::DisplayFromStr")]
     pub signature: Signature,
-    pub bundle: Option<Arc<String>>,
     #[serde(rename = "tx_slot")]
     pub slot: Slot,
     pub priority: u64,
@@ -40,7 +39,7 @@ pub struct TransactionEvent {
 #[derive(Debug, Serialize)]
 #[serde(tag = "action")]
 pub enum TransactionAction {
-    Ingest { source: TransactionSource },
+    Ingest { source: TransactionSource, bundle: Option<Arc<String>> },
     CheckOk,
     CheckErr { reason: CheckFailure },
     ExecuteReq,
@@ -166,10 +165,9 @@ mod tests {
     fn transaction_subject() {
         let event = Event::Transaction(TransactionEvent {
             signature: Signature::from([1; 64]),
-            bundle: None,
             slot: 100,
             priority: 5000,
-            action: TransactionAction::Ingest { source: TransactionSource::Tpu },
+            action: TransactionAction::Ingest { source: TransactionSource::Tpu, bundle: None },
         });
 
         expect!["transaction"].assert_eq(EventDiscriminants::from(&event).into());
@@ -182,10 +180,9 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
-                action: TransactionAction::Ingest { source: TransactionSource::Tpu },
+                action: TransactionAction::Ingest { source: TransactionSource::Tpu, bundle: None },
             }),
         };
         let event = serde_json::to_string_pretty(&event).unwrap();
@@ -196,11 +193,11 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "Ingest",
-              "source": "Tpu"
+              "source": "Tpu",
+              "bundle": null
             }"#]]
         .assert_eq(&event);
     }
@@ -212,10 +209,12 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([2; 64]),
-                bundle: Some(Arc::new("bundle-abc123".to_string())),
                 slot: 100,
                 priority: 10000,
-                action: TransactionAction::Ingest { source: TransactionSource::Jito },
+                action: TransactionAction::Ingest {
+                    source: TransactionSource::Jito,
+                    bundle: Some(Arc::new("bundle-abc123".to_string())),
+                },
             }),
         };
         let event = serde_json::to_string_pretty(&event).unwrap();
@@ -226,11 +225,11 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "3L3RY5sT8K4kyEnqhizwaqxLEbcYvpGrGPNEYRwtbCSUtL6YL86jdrvCbohnP5q8VxQ3qzGmt3W3iQJW97rD7m3",
-              "bundle": "bundle-abc123",
               "tx_slot": 100,
               "priority": 10000,
               "action": "Ingest",
-              "source": "Jito"
+              "source": "Jito",
+              "bundle": "bundle-abc123"
             }"#]]
         .assert_eq(&event);
     }
@@ -242,7 +241,6 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
                 action: TransactionAction::CheckOk,
@@ -256,7 +254,6 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "CheckOk"
@@ -271,7 +268,6 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
                 action: TransactionAction::CheckErr { reason: CheckFailure::ParseOrSanitize },
@@ -285,7 +281,6 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "CheckErr",
@@ -301,7 +296,6 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
                 action: TransactionAction::ExecuteReq,
@@ -315,7 +309,6 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "ExecuteReq"
@@ -330,7 +323,6 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
                 action: TransactionAction::ExecuteOk,
@@ -344,7 +336,6 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "ExecuteOk"
@@ -359,7 +350,6 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
                 action: TransactionAction::ExecuteErr { reason: 42 },
@@ -373,7 +363,6 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "ExecuteErr",
@@ -389,7 +378,6 @@ mod tests {
             slot: 100,
             event: Event::Transaction(TransactionEvent {
                 signature: Signature::from([1; 64]),
-                bundle: None,
                 slot: 100,
                 priority: 5000,
                 action: TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
@@ -403,7 +391,6 @@ mod tests {
               "slot": 100,
               "type": "Transaction",
               "signature": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
-              "bundle": null,
               "tx_slot": 100,
               "priority": 5000,
               "action": "Evict",
