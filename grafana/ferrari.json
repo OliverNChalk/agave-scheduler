@@ -37,7 +37,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -121,7 +121,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "slot",
@@ -136,7 +136,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -220,7 +220,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "container_len",
@@ -235,7 +235,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -319,7 +319,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(recv_tpu[$__rate_interval])",
@@ -334,7 +334,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -418,7 +418,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(recv_bundle[$__rate_interval])",
@@ -433,7 +433,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -517,7 +517,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(check[$__rate_interval])",
@@ -532,7 +532,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -616,7 +616,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(execute[$__rate_interval])",
