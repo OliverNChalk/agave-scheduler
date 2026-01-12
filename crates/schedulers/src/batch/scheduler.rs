@@ -100,7 +100,7 @@ impl BatchScheduler {
         events: Option<EventEmitter>,
         BatchSchedulerArgs { tip, jito, keypair }: BatchSchedulerArgs,
     ) -> (Self, Vec<JoinHandle<()>>) {
-        let (jito_tx, jito_rx) = crossbeam_channel::bounded(128);
+        let (jito_tx, jito_rx) = crossbeam_channel::bounded(1024);
         let jito_thread = JitoThread::spawn(shutdown.clone(), jito_tx, jito, keypair);
 
         let JitoUpdate::BuilderConfig(builder_config) =
