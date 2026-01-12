@@ -80,7 +80,6 @@ agave-bridge = { workspace = true, features = ["testing"] }
 bincode.workspace = true
 expect-test.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
 solana-compute-budget-interface.workspace = true
 solana-hash.workspace = true
 solana-keypair.workspace = true
