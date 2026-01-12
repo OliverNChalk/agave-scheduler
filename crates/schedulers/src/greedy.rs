@@ -101,7 +101,9 @@ impl GreedyScheduler {
         }
 
         // Update metrics.
-        self.metrics.slot.set(bridge.progress().current_slot as f64);
+        self.metrics
+            .current_slot
+            .set(bridge.progress().current_slot as f64);
         self.metrics
             .next_leader_slot
             .set(bridge.progress().next_leader_slot as f64);
@@ -170,7 +172,7 @@ impl GreedyScheduler {
 
             bridge.tx_drop(id.key);
         }
-        self.metrics.recv_evict.increment(shortfall as u64);
+        self.metrics.recv_tpu_evict.increment(shortfall as u64);
         self.slot_event.ingest_tpu_evict += shortfall as u64;
 
         // TODO: Need to dedupe already seen transactions?
@@ -179,13 +181,13 @@ impl GreedyScheduler {
             |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
                     self.unchecked.push(PriorityId { priority, cost, key });
-                    self.metrics.recv_ok.increment(1);
+                    self.metrics.recv_tpu_ok.increment(1);
                     self.slot_event.ingest_tpu_ok += 1;
 
                     TxDecision::Keep
                 }
                 None => {
-                    self.metrics.recv_err.increment(1);
+                    self.metrics.recv_tpu_err.increment(1);
                     self.slot_event.ingest_tpu_err += 1;
 
                     TxDecision::Drop
@@ -440,14 +442,14 @@ impl GreedyScheduler {
 }
 
 struct GreedyMetrics {
-    slot: Gauge,
+    current_slot: Gauge,
     next_leader_slot: Gauge,
     unchecked_len: Gauge,
     checked_len: Gauge,
     cu_in_flight: Gauge,
-    recv_ok: Counter,
-    recv_err: Counter,
-    recv_evict: Counter,
+    recv_tpu_ok: Counter,
+    recv_tpu_err: Counter,
+    recv_tpu_evict: Counter,
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
@@ -455,27 +457,26 @@ struct GreedyMetrics {
     execute_requested: Counter,
     execute_ok: Counter,
     execute_err: Counter,
-    // TODO: Inspect execute responses to determine ok/err.
 }
 
 impl GreedyMetrics {
     fn new() -> Self {
         Self {
-            slot: gauge!("slot"),
-            next_leader_slot: gauge!("next_leader_slot"),
-            unchecked_len: gauge!("unchecked_len"),
-            checked_len: gauge!("checked_len"),
-            recv_ok: counter!("recv_ok"),
-            recv_err: counter!("recv_err"),
-            recv_evict: counter!("recv_evict"),
+            current_slot: gauge!("slot", "label" => "current"),
+            next_leader_slot: gauge!("slot", "label" => "next_leader"),
+            unchecked_len: gauge!("container_len", "label" => "tpu_unchecked"),
+            checked_len: gauge!("container_len", "label" => "tpu_checked"),
             cu_in_flight: gauge!("cu_in_flight"),
-            check_requested: counter!("check_requested"),
-            check_ok: counter!("check_ok"),
-            check_err: counter!("check_err"),
-            check_evict: counter!("check_evict"),
-            execute_requested: counter!("execute_requested"),
-            execute_ok: counter!("execute_ok"),
-            execute_err: counter!("execute_err"),
+            recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
+            recv_tpu_err: counter!("recv_tpu", "label" => "err"),
+            recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
+            check_requested: counter!("check", "label" => "requested"),
+            check_ok: counter!("check", "label" => "ok"),
+            check_err: counter!("check", "label" => "err"),
+            check_evict: counter!("check", "label" => "evict"),
+            execute_requested: counter!("execute", "label" => "requested"),
+            execute_ok: counter!("execute", "label" => "ok"),
+            execute_err: counter!("execute", "label" => "err"),
         }
     }
 }
