@@ -512,7 +512,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
@@ -611,7 +611,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
@@ -630,6 +630,7 @@
     }
   ],
   "preload": false,
+  "refresh": "10s",
   "schemaVersion": 42,
   "tags": [],
   "templating": {
@@ -643,5 +644,5 @@
   "timezone": "browser",
   "title": "Ferrari",
   "uid": "olqdrj9",
-  "version": 3
+  "version": 4
 }
