@@ -60,14 +60,12 @@ pub enum CheckFailure {
     ParseOrSanitize,
     AccountResolution,
     StatusCheck,
-    FeePayer,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum EvictReason {
     UncheckedCapacity,
     CheckedCapacity,
-    SlotRoll,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -276,7 +274,7 @@ mod tests {
                 bundle: None,
                 slot: 100,
                 priority: 5000,
-                action: TransactionAction::CheckErr { reason: CheckFailure::FeePayer },
+                action: TransactionAction::CheckErr { reason: CheckFailure::ParseOrSanitize },
             }),
         };
         let event = serde_json::to_string_pretty(&event).unwrap();
@@ -291,7 +289,7 @@ mod tests {
               "tx_slot": 100,
               "priority": 5000,
               "action": "CheckErr",
-              "reason": "FeePayer"
+              "reason": "ParseOrSanitize"
             }"#]]
         .assert_eq(&event);
     }
