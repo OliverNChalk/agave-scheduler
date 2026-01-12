@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::ops::Bound;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -39,7 +40,10 @@ use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate,
 use crate::batch::tip_program::{
     ChangeTipReceiverArgs, TipDistributionArgs, change_tip_receiver, init_tip_distribution,
 };
-use crate::events::{Event, EventEmitter, SlotEvent};
+use crate::events::{
+    CheckFailure, Event, EventEmitter, EvictReason, SlotEvent, TransactionAction, TransactionEvent,
+    TransactionSource,
+};
 use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
@@ -289,7 +293,7 @@ impl BatchScheduler {
                 match response {
                     WorkerAction::Unprocessed => TxDecision::Keep,
                     WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
-                    WorkerAction::Execute(rep) => self.on_execute(meta, rep),
+                    WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
                 }
             }) {}
         }
@@ -306,7 +310,12 @@ impl BatchScheduler {
         // `additional` will parse correctly & thus have a priority.
         for _ in 0..shortfall {
             let id = self.unchecked_tx.pop_min().unwrap();
-
+            self.emit_tx_event(
+                bridge,
+                id.key,
+                id.priority,
+                TransactionAction::Evict { reason: EvictReason::UncheckedCapacity },
+            );
             bridge.tx_drop(id.key);
         }
         self.metrics.recv_tpu_evict.increment(shortfall as u64);
@@ -317,6 +326,12 @@ impl BatchScheduler {
             |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
+                    self.emit_tx_event(
+                        bridge,
+                        key,
+                        priority,
+                        TransactionAction::Ingest { source: TransactionSource::Tpu, bundle: None },
+                    );
                     self.metrics.recv_tpu_ok.increment(1);
 
                     TxDecision::Keep
@@ -352,17 +367,21 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        if let Ok(key) = bridge.tx_insert(packet) {
-            match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
-                Some((priority, cost)) => {
-                    self.unchecked_tx.push(PriorityId { priority, cost, key });
-                    // TODO: Metrics.
-                }
-                None => {
-                    bridge.tx_drop(key);
-                    // TODO: Metrics.
-                }
+        let Ok(key) = bridge.tx_insert(packet) else {
+            return;
+        };
+
+        match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+            Some((priority, cost)) => {
+                self.unchecked_tx.push(PriorityId { priority, cost, key });
+                self.emit_tx_event(
+                    bridge,
+                    key,
+                    priority,
+                    TransactionAction::Ingest { source: TransactionSource::Jito, bundle: None },
+                );
             }
+            None => bridge.tx_drop(key),
         }
     }
 
@@ -383,6 +402,21 @@ impl BatchScheduler {
             };
 
             keys.push(key);
+        }
+
+        // Emit ingest events for bundle transactions.
+        let bundle_sig = bridge.tx(keys[0]).data.signatures()[0];
+        let bundle_id = Arc::new(bundle_sig.to_string());
+        for &key in &keys {
+            self.emit_tx_event(
+                bridge,
+                key,
+                u64::MAX,
+                TransactionAction::Ingest {
+                    source: TransactionSource::Jito,
+                    bundle: Some(bundle_id.clone()),
+                },
+            );
         }
 
         self.metrics.recv_bundle_ok.increment(1);
@@ -550,6 +584,11 @@ impl BatchScheduler {
                 break;
             }
 
+            // Emit ExecuteReq events.
+            for tx in &self.schedule_batch {
+                self.emit_tx_event(bridge, tx.key, tx.meta.priority, TransactionAction::ExecuteReq);
+            }
+
             // Update metrics.
             self.metrics
                 .execute_requested
@@ -575,6 +614,18 @@ impl BatchScheduler {
         let status_ok = status_check_flags::REQUESTED | status_check_flags::PERFORMED;
         let status_failed = rep.status_check_flags & !status_ok != 0;
         if parsing_failed || resolve_failed || status_failed {
+            let reason = match (parsing_failed, resolve_failed, status_failed) {
+                (true, false, false) => CheckFailure::ParseOrSanitize,
+                (false, true, false) => CheckFailure::AccountResolution,
+                (false, false, true) => CheckFailure::StatusCheck,
+                _ => unreachable!(),
+            };
+            self.emit_tx_event(
+                bridge,
+                meta.key,
+                meta.priority,
+                TransactionAction::CheckErr { reason },
+            );
             self.metrics.check_err.increment(1);
 
             // NB: If we are re-checking then we must remove here, else we can just silently
@@ -617,6 +668,12 @@ impl BatchScheduler {
         // First check. Evict lowest priority if at capacity.
         if self.checked_tx.len() == CHECKED_CAPACITY {
             let id = self.checked_tx.pop_first().unwrap();
+            self.emit_tx_event(
+                bridge,
+                id.key,
+                id.priority,
+                TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
+            );
             bridge.tx_drop(id.key);
 
             self.metrics.check_evict.increment(1);
@@ -625,6 +682,7 @@ impl BatchScheduler {
         // Insert the new transaction (yes this may be lower priority than what
         // we just evicted but that's fine).
         self.checked_tx.insert(meta);
+        self.emit_tx_event(bridge, meta.key, meta.priority, TransactionAction::CheckOk);
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);
@@ -632,18 +690,26 @@ impl BatchScheduler {
         TxDecision::Keep
     }
 
-    fn on_execute(&mut self, meta: PriorityId, rep: ExecutionResponse) -> TxDecision {
+    fn on_execute<B>(&mut self, bridge: &B, meta: PriorityId, rep: ExecutionResponse) -> TxDecision
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
         // Remove from executing set now that execution is complete.
         self.executing_tx.remove(&meta.key);
 
         // Remove in-flight costs.
         self.cu_in_flight -= meta.cost;
 
-        // Update metrics.
-        match rep.not_included_reason == not_included_reasons::NONE {
-            true => self.metrics.execute_ok.increment(1),
-            false => self.metrics.execute_err.increment(1),
-        }
+        // Emit event and update metrics.
+        let (action, metric) = match rep.not_included_reason {
+            not_included_reasons::NONE => (TransactionAction::ExecuteOk, &self.metrics.execute_ok),
+            reason => (
+                TransactionAction::ExecuteErr { reason: u32::from(reason) },
+                &self.metrics.execute_err,
+            ),
+        };
+        self.emit_tx_event(bridge, meta.key, meta.priority, action);
+        metric.increment(1);
 
         TxDecision::Drop
     }
@@ -694,6 +760,25 @@ impl BatchScheduler {
             // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
             cost.try_into().unwrap(),
         ))
+    }
+
+    fn emit_tx_event<B>(
+        &self,
+        bridge: &B,
+        key: TransactionKey,
+        priority: u64,
+        action: TransactionAction,
+    ) where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let Some(events) = &self.events else { return };
+
+        events.emit(Event::Transaction(TransactionEvent {
+            signature: bridge.tx(key).data.signatures()[0],
+            slot: self.slot,
+            priority,
+            action,
+        }));
     }
 }
 

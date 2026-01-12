@@ -98,6 +98,7 @@ solana-rpc-client = "3.0.0"
 solana-rpc-client-types = "3.0.0"
 solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-sdk-ids = "3.0.0"
+solana-signature = "3.0.0"
 solana-svm-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "temp/greedy" }
 solana-system-transaction = "3.0.0"
 solana-transaction = "3.0.1"
