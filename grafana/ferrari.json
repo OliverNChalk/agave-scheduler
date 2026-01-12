@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2438566470512640,
+  "id": 0,
   "links": [],
   "panels": [
     {
@@ -116,7 +116,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
@@ -215,7 +215,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
@@ -314,7 +314,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
@@ -413,7 +413,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
@@ -643,6 +643,5 @@
   "timezone": "browser",
   "title": "Ferrari",
   "uid": "olqdrj9",
-  "version": 5,
-  "weekStart": ""
+  "version": 3
 }
