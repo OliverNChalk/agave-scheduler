@@ -384,9 +384,7 @@ impl BatchScheduler {
                     TransactionAction::Ingest { source: TransactionSource::Jito },
                 );
             }
-            None => {
-                bridge.tx_drop(key);
-            }
+            None => bridge.tx_drop(key),
         }
     }
 
