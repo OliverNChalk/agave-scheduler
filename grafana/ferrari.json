@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2438566470512640,
+  "id": 0,
   "links": [],
   "panels": [
     {
@@ -37,7 +37,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -116,12 +116,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "slot",
@@ -136,7 +136,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -215,12 +215,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "container_len",
@@ -235,7 +235,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -314,12 +314,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(recv_tpu[$__rate_interval])",
@@ -334,7 +334,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -413,12 +413,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(recv_bundle[$__rate_interval])",
@@ -433,7 +433,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -512,12 +512,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(check[$__rate_interval])",
@@ -532,7 +532,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "af7kuio7r6ghse"
+        "uid": "P4169E866C3094E38"
       },
       "fieldConfig": {
         "defaults": {
@@ -611,12 +611,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.4.0-20781422371",
+      "pluginVersion": "12.3.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "af7kuio7r6ghse"
+            "uid": "P4169E866C3094E38"
           },
           "editorMode": "code",
           "expr": "increase(execute[$__rate_interval])",
@@ -630,6 +630,7 @@
     }
   ],
   "preload": false,
+  "refresh": "10s",
   "schemaVersion": 42,
   "tags": [],
   "templating": {
@@ -643,6 +644,5 @@
   "timezone": "browser",
   "title": "Ferrari",
   "uid": "olqdrj9",
-  "version": 5,
-  "weekStart": ""
+  "version": 4
 }
