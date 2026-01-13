@@ -205,7 +205,7 @@ impl BatchScheduler {
         }
 
         // Check for slot roll.
-        let was_leader = self.slot_stats.was_leader;
+        let was_leader_ready = self.slot_stats.was_leader_ready;
         let progress = *bridge.progress();
 
         // Slot has changed.
@@ -226,32 +226,23 @@ impl BatchScheduler {
 
             // Update our local state.
             self.slot = progress.current_slot;
-            self.slot_stats.was_leader = progress.leader_state != NOT_LEADER;
+            self.slot_stats.was_leader_ready = false;
 
             // Start another recheck if we are not currently performing one.
             self.next_recheck = self
                 .next_recheck
                 .or_else(|| self.checked_tx.last().copied());
-
-            // If we have transitioned to being the leader, we must configure our tip
-            // accounts.
-            if !was_leader && self.slot_stats.was_leader {
-                self.become_tip_receiver(bridge);
-            }
         }
 
         // If we have just become the leader, emit an event & configure tip accounts.
-        if progress.leader_state == LEADER_READY && !was_leader {
+        if progress.leader_state == LEADER_READY && !was_leader_ready {
             if let Some(events) = &self.events {
                 events.emit(Event::LeaderReady);
             }
 
-            self.slot_stats.was_leader = true;
+            self.slot_stats.was_leader_ready = true;
             self.become_tip_receiver(bridge);
         }
-
-        // Track if we became leader at any point.
-        self.slot_stats.was_leader |= progress.leader_state == LEADER_READY;
     }
 
     fn become_tip_receiver<B>(&self, bridge: &mut B)

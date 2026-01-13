@@ -71,7 +71,7 @@ pub enum EvictReason {
 
 #[derive(Debug, Default, Serialize)]
 pub struct SlotStatsEvent {
-    pub was_leader: bool,
+    pub was_leader_ready: bool,
     pub ingest_tpu_ok: u64,
     pub ingest_tpu_err: u64,
     pub ingest_tpu_evict: u64,
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn slot_stats_subject() {
         let event = Event::SlotStats(SlotStatsEvent {
-            was_leader: true,
+            was_leader_ready: true,
             ingest_tpu_ok: 7,
             ingest_tpu_err: 3,
             ingest_tpu_evict: 2,
@@ -165,7 +165,7 @@ mod tests {
             timestamp: DateTime::UNIX_EPOCH,
             slot: 25,
             event: Event::SlotStats(SlotStatsEvent {
-                was_leader: true,
+                was_leader_ready: true,
                 ingest_tpu_ok: 7,
                 ingest_tpu_err: 3,
                 ingest_tpu_evict: 2,
@@ -188,7 +188,7 @@ mod tests {
               "timestamp": "1970-01-01T00:00:00Z",
               "slot": 25,
               "type": "SlotStats",
-              "was_leader": true,
+              "was_leader_ready": true,
               "ingest_tpu_ok": 7,
               "ingest_tpu_err": 3,
               "ingest_tpu_evict": 2,

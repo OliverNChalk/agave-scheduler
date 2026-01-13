@@ -118,7 +118,7 @@ impl GreedyScheduler {
     {
         let progress = bridge.progress();
         if self.slot == progress.current_slot {
-            self.slot_event.was_leader |= progress.leader_state == LEADER_READY;
+            self.slot_event.was_leader_ready |= progress.leader_state == LEADER_READY;
 
             return;
         }
