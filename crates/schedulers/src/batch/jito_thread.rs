@@ -161,7 +161,7 @@ impl JitoThread {
         // Poll recent blockhashes.
         let mut recent_blockhashes = IntervalStream::new(
             tokio::time::interval(Duration::from_secs(30)),
-            Box::new(move || {
+            Box::pin(move || {
                 async {
                     rpc.get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
                         .await

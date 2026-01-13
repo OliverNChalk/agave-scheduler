@@ -8,7 +8,7 @@ use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, status_check_flags,
 };
-use agave_scheduler_bindings::{IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
+use agave_scheduler_bindings::{LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
 
 const CHECK_WORKER: usize = 0;
 const EXECUTE_WORKER: usize = 1;
@@ -63,7 +63,7 @@ impl FifoScheduler {
         while bridge.pop_worker(EXECUTE_WORKER, |_, WorkerResponse { .. }| TxDecision::Drop) {}
 
         // Ingest a bounded amount of new transactions.
-        let max_count = match bridge.progress().leader_state == IS_LEADER {
+        let max_count = match bridge.progress().leader_state == LEADER_READY {
             true => 128,
             false => 1024,
         };
@@ -104,7 +104,9 @@ impl FifoScheduler {
         }
 
         // If we are the leader, schedule executes.
-        if bridge.progress().leader_state == IS_LEADER && bridge.worker(EXECUTE_WORKER).len() == 0 {
+        if bridge.progress().leader_state == LEADER_READY
+            && bridge.worker(EXECUTE_WORKER).len() == 0
+        {
             self.batch.clear();
             self.batch.extend(
                 std::iter::from_fn(|| self.execute_queue.pop_front())

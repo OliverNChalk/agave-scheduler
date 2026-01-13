@@ -21,6 +21,7 @@ serde_json.workspace = true
 serde_with.workspace = true
 serde_yaml.workspace = true
 solana-keypair.workspace = true
+solana-pubkey.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }
 toolbox = { workspace = true, features = ["named_task", "shutdown", "tracing", "version"] }
 tracing.workspace = true
