@@ -14,8 +14,7 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{
-    LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, NOT_LEADER, SharableTransactionRegion,
-    pack_message_flags,
+    LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, SharableTransactionRegion, pack_message_flags,
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
