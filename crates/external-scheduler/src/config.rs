@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_with::serde_as;
-use solana_keypair::Pubkey;
+use solana_pubkey::Pubkey;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Config {

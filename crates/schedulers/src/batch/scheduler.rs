@@ -14,7 +14,7 @@ use agave_scheduler_bindings::worker_message_types::{
     parsing_and_sanitization_flags, resolve_flags, status_check_flags,
 };
 use agave_scheduler_bindings::{
-    IS_LEADER, MAX_TRANSACTIONS_PER_MESSAGE, SharableTransactionRegion, pack_message_flags,
+    LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, SharableTransactionRegion, pack_message_flags,
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
@@ -149,7 +149,7 @@ impl BatchScheduler {
         self.drain_worker_responses(bridge);
 
         // Ingest a bounded amount of new transactions.
-        let is_leader = bridge.progress().leader_state == IS_LEADER;
+        let is_leader = bridge.progress().leader_state == LEADER_READY;
         match is_leader {
             true => self.drain_tpu(bridge, 128),
             false => self.drain_tpu(bridge, 1024),
@@ -225,7 +225,7 @@ impl BatchScheduler {
 
         // Update our local state.
         self.slot = progress.current_slot;
-        self.slot_event.is_leader = progress.leader_state == IS_LEADER;
+        self.slot_event.is_leader = progress.leader_state == LEADER_READY;
 
         // Start another recheck if we are not currently performing one.
         self.next_recheck = self
@@ -514,7 +514,7 @@ impl BatchScheduler {
             });
         }
 
-        debug_assert_eq!(bridge.progress().leader_state, IS_LEADER);
+        debug_assert_eq!(bridge.progress().leader_state, LEADER_READY);
         let budget_percentage =
             std::cmp::min(bridge.progress().current_slot_progress + BLOCK_FILL_CUTOFF, 100);
         // TODO: Would be ideal for the scheduler protocol to tell us the max block
