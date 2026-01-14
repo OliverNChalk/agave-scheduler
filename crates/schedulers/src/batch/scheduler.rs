@@ -41,8 +41,8 @@ use crate::batch::tip_program::{
     ChangeTipReceiverArgs, TipDistributionArgs, change_tip_receiver, init_tip_distribution,
 };
 use crate::events::{
-    CheckFailure, Event, EventEmitter, EvictReason, SlotEvent, TransactionAction, TransactionEvent,
-    TransactionSource,
+    CheckFailure, Event, EventEmitter, EvictReason, SlotStatsEvent, TransactionAction,
+    TransactionEvent, TransactionSource,
 };
 use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
 
@@ -89,7 +89,7 @@ pub struct BatchScheduler {
 
     events: Option<EventEmitter>,
     slot: Slot,
-    slot_event: SlotEvent,
+    slot_stats: SlotStatsEvent,
     metrics: BatchMetrics,
 }
 
@@ -131,7 +131,7 @@ impl BatchScheduler {
 
                 events,
                 slot: 0,
-                slot_event: SlotEvent::default(),
+                slot_stats: SlotStatsEvent::default(),
                 metrics: BatchMetrics::new(),
             },
             vec![jito_thread],
@@ -204,42 +204,47 @@ impl BatchScheduler {
         }
 
         // Check for slot roll.
-        let was_leader = self.slot_event.is_leader;
-        let progress = bridge.progress();
-        if self.slot == progress.current_slot {
-            return;
-        }
+        let was_leader_ready = self.slot_stats.was_leader_ready;
+        let progress = *bridge.progress();
 
-        if let Some(events) = &self.events {
-            // Grab the old slot & state.
-            let event = core::mem::take(&mut self.slot_event);
+        // Slot has changed.
+        if progress.current_slot != self.slot {
+            if let Some(events) = &self.events {
+                // Emit SlotStats for the slot that just ended.
+                if self.slot != 0 {
+                    let stats = core::mem::take(&mut self.slot_stats);
+                    events.emit(Event::SlotStats(stats));
+                }
 
-            // If this is not the 0 slot, publish.
-            if self.slot != 0 {
-                events.emit(Event::Slot(event));
+                // Update context for new slot events.
+                events.ctx().set(progress.current_slot);
+
+                // Emit SlotStart for the new slot.
+                events.emit(Event::SlotStart);
             }
 
-            // Update context for intraslot events
-            events.ctx().set(progress.current_slot);
+            // Update our local state.
+            self.slot = progress.current_slot;
+            self.slot_stats.was_leader_ready = false;
+
+            // Start another recheck if we are not currently performing one.
+            self.next_recheck = self
+                .next_recheck
+                .or_else(|| self.checked_tx.last().copied());
         }
 
-        // Update our local state.
-        self.slot = progress.current_slot;
-        self.slot_event.is_leader = progress.leader_state == LEADER_READY;
+        // If we have just become the leader, emit an event & configure tip accounts.
+        if progress.leader_state == LEADER_READY && !was_leader_ready {
+            if let Some(events) = &self.events {
+                events.emit(Event::LeaderReady);
+            }
 
-        // Start another recheck if we are not currently performing one.
-        self.next_recheck = self
-            .next_recheck
-            .or_else(|| self.checked_tx.last().copied());
-
-        // If we have transitioned to being the leader, we must configure our tip
-        // accounts.
-        if !was_leader && self.slot_event.is_leader {
+            self.slot_stats.was_leader_ready = true;
             self.become_tip_receiver(bridge);
         }
     }
 
-    fn become_tip_receiver<B>(&self, bridge: &mut B)
+    fn become_tip_receiver<B>(&mut self, bridge: &mut B)
     where
         B: Bridge<Meta = PriorityId>,
     {
@@ -267,6 +272,7 @@ impl BatchScheduler {
         );
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
+        self.cu_in_flight += 2;
         bridge.schedule(ScheduleBatch {
             worker: 1,
             transactions: &[

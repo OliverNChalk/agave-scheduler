@@ -20,7 +20,9 @@ pub struct StampedEvent {
 #[strum_discriminants(strum(serialize_all = "kebab-case"))]
 #[serde(tag = "type")]
 pub enum Event {
-    Slot(SlotEvent),
+    SlotStart,
+    LeaderReady,
+    SlotStats(SlotStatsEvent),
     Transaction(TransactionEvent),
 }
 
@@ -68,8 +70,8 @@ pub enum EvictReason {
 }
 
 #[derive(Debug, Default, Serialize)]
-pub struct SlotEvent {
-    pub is_leader: bool,
+pub struct SlotStatsEvent {
+    pub was_leader_ready: bool,
     pub ingest_tpu_ok: u64,
     pub ingest_tpu_err: u64,
     pub ingest_tpu_evict: u64,
@@ -92,9 +94,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slot_subject() {
-        let event = Event::Slot(SlotEvent {
-            is_leader: true,
+    fn slot_start_subject() {
+        let event = Event::SlotStart;
+
+        expect!["slot-start"].assert_eq(EventDiscriminants::from(&event).into());
+    }
+
+    #[test]
+    fn slot_start_event() {
+        let event =
+            StampedEvent { timestamp: DateTime::UNIX_EPOCH, slot: 100, event: Event::SlotStart };
+        let event = serde_json::to_string_pretty(&event).unwrap();
+
+        expect![[r#"
+            {
+              "timestamp": "1970-01-01T00:00:00Z",
+              "slot": 100,
+              "type": "SlotStart"
+            }"#]]
+        .assert_eq(&event);
+    }
+
+    #[test]
+    fn leader_ready_subject() {
+        let event = Event::LeaderReady;
+
+        expect!["leader-ready"].assert_eq(EventDiscriminants::from(&event).into());
+    }
+
+    #[test]
+    fn leader_ready_event() {
+        let event =
+            StampedEvent { timestamp: DateTime::UNIX_EPOCH, slot: 105, event: Event::LeaderReady };
+        let event = serde_json::to_string_pretty(&event).unwrap();
+
+        expect![[r#"
+            {
+              "timestamp": "1970-01-01T00:00:00Z",
+              "slot": 105,
+              "type": "LeaderReady"
+            }"#]]
+        .assert_eq(&event);
+    }
+
+    #[test]
+    fn slot_stats_subject() {
+        let event = Event::SlotStats(SlotStatsEvent {
+            was_leader_ready: true,
             ingest_tpu_ok: 7,
             ingest_tpu_err: 3,
             ingest_tpu_evict: 2,
@@ -110,16 +156,16 @@ mod tests {
             execute_err: 2,
         });
 
-        expect!["slot"].assert_eq(EventDiscriminants::from(&event).into());
+        expect!["slot-stats"].assert_eq(EventDiscriminants::from(&event).into());
     }
 
     #[test]
-    fn slot_event() {
+    fn slot_stats_event() {
         let event = StampedEvent {
             timestamp: DateTime::UNIX_EPOCH,
             slot: 25,
-            event: Event::Slot(SlotEvent {
-                is_leader: true,
+            event: Event::SlotStats(SlotStatsEvent {
+                was_leader_ready: true,
                 ingest_tpu_ok: 7,
                 ingest_tpu_err: 3,
                 ingest_tpu_evict: 2,
@@ -137,13 +183,12 @@ mod tests {
         };
         let event = serde_json::to_string_pretty(&event).unwrap();
 
-        // Assert.
         expect![[r#"
             {
               "timestamp": "1970-01-01T00:00:00Z",
               "slot": 25,
-              "type": "Slot",
-              "is_leader": true,
+              "type": "SlotStats",
+              "was_leader_ready": true,
               "ingest_tpu_ok": 7,
               "ingest_tpu_err": 3,
               "ingest_tpu_evict": 2,

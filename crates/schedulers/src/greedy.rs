@@ -25,7 +25,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
-use crate::events::{Event, EventEmitter, SlotEvent};
+use crate::events::{Event, EventEmitter, SlotStatsEvent};
 use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
@@ -49,7 +49,7 @@ pub struct GreedyScheduler {
 
     events: Option<EventEmitter>,
     slot: Slot,
-    slot_event: SlotEvent,
+    slot_event: SlotStatsEvent,
     metrics: GreedyMetrics,
 }
 
@@ -65,7 +65,7 @@ impl GreedyScheduler {
 
             events,
             slot: 0,
-            slot_event: SlotEvent::default(),
+            slot_event: SlotStatsEvent::default(),
             metrics: GreedyMetrics::new(),
         }
     }
@@ -118,7 +118,7 @@ impl GreedyScheduler {
     {
         let progress = bridge.progress();
         if self.slot == progress.current_slot {
-            self.slot_event.is_leader |= progress.leader_state == LEADER_READY;
+            self.slot_event.was_leader_ready |= progress.leader_state == LEADER_READY;
 
             return;
         }
@@ -128,7 +128,7 @@ impl GreedyScheduler {
         if let Some(events) = &self.events {
             // If this is not the 0 slot, publish.
             if self.slot != 0 {
-                events.emit(Event::Slot(event));
+                events.emit(Event::SlotStats(event));
             }
 
             // Update context for intraslot events
