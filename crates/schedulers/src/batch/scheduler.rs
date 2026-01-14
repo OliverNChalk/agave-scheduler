@@ -395,6 +395,7 @@ impl BatchScheduler {
                     return;
                 }
 
+                // Evict lowest if we're at capacity.
                 if self.unchecked_tx.len() == UNCHECKED_CAPACITY {
                     let id = self.unchecked_tx.pop_min().unwrap();
                     self.emit_tx_event(
@@ -407,7 +408,7 @@ impl BatchScheduler {
                     self.metrics.recv_packet_evict.increment(1);
                 }
 
-                // TODO: This needs to trigger evictions if we're at capacity.
+                // Store the new packet.
                 self.unchecked_tx.push(PriorityId { priority, cost, key });
                 self.emit_tx_event(
                     bridge,
