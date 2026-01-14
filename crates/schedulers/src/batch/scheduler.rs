@@ -272,6 +272,7 @@ impl BatchScheduler {
         );
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
+        self.cu_in_flight += 2;
         bridge.schedule(ScheduleBatch {
             worker: 1,
             transactions: &[
