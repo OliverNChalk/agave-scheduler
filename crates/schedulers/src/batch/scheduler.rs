@@ -5,8 +5,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use agave_bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
-    WorkerAction, WorkerResponse,
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
+    TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 use agave_scheduler_bindings::pack_message_flags::{check_flags, execution_flags};
 use agave_scheduler_bindings::worker_message_types::{
@@ -38,7 +38,8 @@ use tracing::info;
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
-    ChangeTipReceiverArgs, TipDistributionArgs, change_tip_receiver, init_tip_distribution,
+    ChangeTipReceiverArgs, TIP_PAYMENT_PROGRAM, TipDistributionArgs, change_tip_receiver,
+    init_tip_distribution,
 };
 use crate::events::{
     CheckFailure, Event, EventEmitter, EvictReason, SlotStatsEvent, TransactionAction,
@@ -331,6 +332,13 @@ impl BatchScheduler {
         bridge.tpu_drain(
             |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
                 Some((priority, cost)) => {
+                    // Ban using the tip payment program as it could be used to steal tips.
+                    if Self::should_filter(bridge.tx(key)) {
+                        self.metrics.recv_tpu_filtered.increment(1);
+
+                        return TxDecision::Drop;
+                    }
+
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
                         bridge,
@@ -379,6 +387,15 @@ impl BatchScheduler {
 
         match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
             Some((priority, cost)) => {
+                // Ban using the tip payment program as it could be used to steal tips.
+                if Self::should_filter(bridge.tx(key)) {
+                    self.metrics.recv_packet_filtered.increment(1);
+                    bridge.tx_drop(key);
+
+                    return;
+                }
+
+                // TODO: This needs to trigger evictions if we're at capacity.
                 self.unchecked_tx.push(PriorityId { priority, cost, key });
                 self.emit_tx_event(
                     bridge,
@@ -386,8 +403,13 @@ impl BatchScheduler {
                     priority,
                     TransactionAction::Ingest { source: TransactionSource::Jito, bundle: None },
                 );
+                self.metrics.recv_packet_ok.increment(1);
             }
-            None => bridge.tx_drop(key),
+            None => {
+                self.metrics.recv_packet_err.increment(1);
+
+                bridge.tx_drop(key)
+            }
         }
     }
 
@@ -408,6 +430,16 @@ impl BatchScheduler {
             };
 
             keys.push(key);
+        }
+
+        // Filter bundles containing transactions that write to tip accounts.
+        if keys.iter().any(|key| Self::should_filter(bridge.tx(*key))) {
+            self.metrics.recv_bundle_filtered.increment(1);
+            for key in keys {
+                bridge.tx_drop(key);
+            }
+
+            return;
         }
 
         // Emit ingest events for bundle transactions.
@@ -786,6 +818,12 @@ impl BatchScheduler {
             action,
         }));
     }
+
+    fn should_filter(tx: &TransactionState) -> bool {
+        tx.write_locks()
+            .chain(tx.read_locks())
+            .any(|lock| lock == &TIP_PAYMENT_PROGRAM)
+    }
 }
 
 struct BatchMetrics {
@@ -798,8 +836,14 @@ struct BatchMetrics {
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
     recv_tpu_evict: Counter,
+    recv_tpu_filtered: Counter,
+    recv_packet_ok: Counter,
+    recv_packet_err: Counter,
+    recv_packet_evict: Counter,
+    recv_packet_filtered: Counter,
     recv_bundle_ok: Counter,
     recv_bundle_err: Counter,
+    recv_bundle_filtered: Counter,
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
@@ -820,8 +864,14 @@ impl BatchMetrics {
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
             recv_tpu_err: counter!("recv_tpu", "label" => "err"),
             recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
+            recv_tpu_filtered: counter!("recv_tpu", "label" => "filtered"),
+            recv_packet_ok: counter!("recv_packet", "label" => "ok"),
+            recv_packet_err: counter!("recv_packet", "label" => "err"),
+            recv_packet_evict: counter!("recv_packet", "label" => "evict"),
+            recv_packet_filtered: counter!("recv_packet", "label" => "filtered"),
             recv_bundle_ok: counter!("recv_bundle", "label" => "ok"),
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
+            recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
             cu_in_flight: gauge!("cu_in_flight"),
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
