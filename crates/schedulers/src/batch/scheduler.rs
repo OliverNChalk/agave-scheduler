@@ -244,7 +244,7 @@ impl BatchScheduler {
         }
     }
 
-    fn become_tip_receiver<B>(&self, bridge: &mut B)
+    fn become_tip_receiver<B>(&mut self, bridge: &mut B)
     where
         B: Bridge<Meta = PriorityId>,
     {
