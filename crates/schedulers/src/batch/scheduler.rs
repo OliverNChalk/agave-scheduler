@@ -395,6 +395,18 @@ impl BatchScheduler {
                     return;
                 }
 
+                if self.unchecked_tx.len() == UNCHECKED_CAPACITY {
+                    let id = self.unchecked_tx.pop_min().unwrap();
+                    self.emit_tx_event(
+                        bridge,
+                        id.key,
+                        id.priority,
+                        TransactionAction::Evict { reason: EvictReason::UncheckedCapacity },
+                    );
+                    bridge.tx_drop(id.key);
+                    self.metrics.recv_packet_evict.increment(1);
+                }
+
                 // TODO: This needs to trigger evictions if we're at capacity.
                 self.unchecked_tx.push(PriorityId { priority, cost, key });
                 self.emit_tx_event(
@@ -408,7 +420,7 @@ impl BatchScheduler {
             None => {
                 self.metrics.recv_packet_err.increment(1);
 
-                bridge.tx_drop(key)
+                bridge.tx_drop(key);
             }
         }
     }
