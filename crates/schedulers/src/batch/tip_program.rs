@@ -7,7 +7,8 @@ use solana_sdk_ids::system_program;
 use solana_transaction::Transaction;
 use solana_transaction::versioned::VersionedTransaction;
 
-const TIP_PAYMENT_PROGRAM: Pubkey = pubkey!("T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt");
+pub(crate) const TIP_PAYMENT_PROGRAM: Pubkey =
+    pubkey!("T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt");
 pub(crate) const TIP_PAYMENT_CONFIG: Pubkey =
     pubkey!("HgzT81VF1xZ3FT9Eq1pHhea7Wcfq2bv4tWTP3VvJ8Y9D");
 const TIP_PAYMENT_ACCOUNT_0: Pubkey = pubkey!("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5");
