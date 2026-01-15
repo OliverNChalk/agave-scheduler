@@ -274,18 +274,22 @@ impl BatchScheduler {
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
         self.cu_in_flight += 2;
+        // TODO: Schedule as a single batch once we have SIMD83 live.
         bridge.schedule(ScheduleBatch {
             worker: 1,
-            transactions: &[
-                KeyedTransactionMeta {
-                    key: init_tip_distribution,
-                    meta: PriorityId { priority: u64::MAX, cost: 1, key: init_tip_distribution },
-                },
-                KeyedTransactionMeta {
-                    key: change_tip_receiver,
-                    meta: PriorityId { priority: u64::MAX, cost: 1, key: change_tip_receiver },
-                },
-            ],
+            transactions: &[KeyedTransactionMeta {
+                key: init_tip_distribution,
+                meta: PriorityId { priority: u64::MAX, cost: 1, key: init_tip_distribution },
+            }],
+            max_working_slot: self.slot + 4,
+            flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
+        });
+        bridge.schedule(ScheduleBatch {
+            worker: 1,
+            transactions: &[KeyedTransactionMeta {
+                key: change_tip_receiver,
+                meta: PriorityId { priority: u64::MAX, cost: 1, key: change_tip_receiver },
+            }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
         });
