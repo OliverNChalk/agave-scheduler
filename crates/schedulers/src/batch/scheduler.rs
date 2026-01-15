@@ -19,6 +19,7 @@ use agave_scheduler_bindings::{
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
+use hashbrown::hash_map::EntryRef;
 use hashbrown::{HashMap, HashSet};
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -56,6 +57,8 @@ const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE
 const_assert!(TX_BATCH_SIZE < 4096);
 
 const CHECK_WORKER: usize = 0;
+const BUNDLE_WORKER: usize = 1;
+const TPU_WORKER_START: usize = 2;
 const MAX_CHECK_BATCHES: usize = 8;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
@@ -84,8 +87,8 @@ pub struct BatchScheduler {
     checked_tx: BTreeSet<PriorityId>,
     executing_tx: HashSet<TransactionKey>,
     next_recheck: Option<PriorityId>,
-    cu_in_flight: u32,
-    schedule_locks: HashMap<Pubkey, bool>,
+    in_flight_cus: u32,
+    in_flight_locks: HashMap<Pubkey, AccountLock>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
     last_progress_time: Instant,
 
@@ -126,8 +129,8 @@ impl BatchScheduler {
                 checked_tx: BTreeSet::new(),
                 executing_tx: HashSet::new(),
                 next_recheck: None,
-                cu_in_flight: 0,
-                schedule_locks: HashMap::new(),
+                in_flight_cus: 0,
+                in_flight_locks: HashMap::new(),
                 schedule_batch: Vec::new(),
                 last_progress_time: Instant::now(),
 
@@ -190,7 +193,12 @@ impl BatchScheduler {
             .tpu_checked_len
             .set(self.checked_tx.len() as f64);
         self.metrics.bundles_len.set(self.bundles.len() as f64);
-        self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
+        self.metrics
+            .in_flight_cus
+            .set(f64::from(self.in_flight_cus));
+        self.metrics
+            .in_flight_locks
+            .set(self.in_flight_locks.len() as f64);
     }
 
     fn check_slot_roll<B>(&mut self, bridge: &mut B)
@@ -277,10 +285,10 @@ impl BatchScheduler {
         );
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
-        self.cu_in_flight += 2;
+        self.in_flight_cus += 2;
         // TODO: Schedule as a single batch once we have SIMD83 live.
         bridge.schedule(ScheduleBatch {
-            worker: 1,
+            worker: BUNDLE_WORKER,
             transactions: &[KeyedTransactionMeta {
                 key: init_tip_distribution,
                 meta: PriorityId { priority: u64::MAX, cost: 1, key: init_tip_distribution },
@@ -289,7 +297,7 @@ impl BatchScheduler {
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
         });
         bridge.schedule(ScheduleBatch {
-            worker: 1,
+            worker: BUNDLE_WORKER,
             transactions: &[KeyedTransactionMeta {
                 key: change_tip_receiver,
                 meta: PriorityId { priority: u64::MAX, cost: 1, key: change_tip_receiver },
@@ -566,8 +574,6 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        self.schedule_locks.clear();
-
         // TEMP: Schedule all bundles.
         for _ in 0..bridge.worker(1).rem() {
             let Some((_, bundle)) = self.bundles.pop_front() else {
@@ -582,7 +588,7 @@ impl BatchScheduler {
                 }));
 
             bridge.schedule(ScheduleBatch {
-                worker: 1,
+                worker: BUNDLE_WORKER,
                 transactions: &self.schedule_batch,
                 max_working_slot: bridge.progress().current_slot + 1,
                 flags: pack_message_flags::EXECUTE
@@ -599,9 +605,9 @@ impl BatchScheduler {
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
             .saturating_sub(bridge.progress().remaining_cost_units)
-            + u64::from(self.cu_in_flight);
+            + u64::from(self.in_flight_cus);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
-        for worker in 1..bridge.worker_count() {
+        for worker in TPU_WORKER_START..bridge.worker_count() {
             if budget_remaining == 0 || self.checked_tx.is_empty() {
                 break;
             }
@@ -627,11 +633,11 @@ impl BatchScheduler {
                         let tx = bridge.tx(id.key);
                         if tx
                             .write_locks()
-                            .any(|key| self.schedule_locks.insert(*key, true).is_some())
+                            .any(|key| self.in_flight_locks.contains_key(key))
                             || tx.read_locks().any(|key| {
-                                self.schedule_locks
-                                    .insert(*key, false)
-                                    .is_some_and(|writable| writable)
+                                self.in_flight_locks
+                                    .get(key)
+                                    .is_some_and(|lock| matches!(lock, AccountLock::Write(_)))
                             })
                         {
                             self.checked_tx.insert(*id);
@@ -640,9 +646,27 @@ impl BatchScheduler {
                             return false;
                         }
 
+                        // Insert all the locks.
+                        for key in tx.write_locks() {
+                            let prev = self
+                                .in_flight_locks
+                                .insert(*key, AccountLock::Write(id.key));
+                            assert!(prev.is_none());
+                        }
+                        for key in tx.write_locks() {
+                            let AccountLock::Read(set) = self
+                                .in_flight_locks
+                                .entry_ref(key)
+                                .or_insert_with(|| AccountLock::Read(HashSet::new()))
+                            else {
+                                panic!();
+                            };
+                            assert!(set.insert(id.key));
+                        }
+
                         // Update the budget as we are scheduling this TX.
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
-                        self.cu_in_flight += id.cost;
+                        self.in_flight_cus += id.cost;
 
                         // Track that this transaction is now executing.
                         self.executing_tx.insert(id.key);
@@ -775,7 +799,30 @@ impl BatchScheduler {
         self.executing_tx.remove(&meta.key);
 
         // Remove in-flight costs.
-        self.cu_in_flight -= meta.cost;
+        self.in_flight_cus -= meta.cost;
+
+        // Remove in flight locks.
+        let tx = bridge.tx(meta.key);
+        for write in tx.write_locks() {
+            let lock = self.in_flight_locks.remove(write).unwrap();
+            assert_eq!(lock, AccountLock::Write(meta.key));
+        }
+        for read in tx.read_locks() {
+            let EntryRef::Occupied(mut entry) = self.in_flight_locks.entry_ref(read) else {
+                panic!();
+            };
+
+            // Remove our TX from the read set.
+            let AccountLock::Read(set) = entry.get_mut() else {
+                panic!();
+            };
+            assert!(set.remove(&meta.key));
+
+            // If thei set is empty now, remove this read lock.
+            if set.is_empty() {
+                entry.remove();
+            }
+        }
 
         // Emit event and update metrics.
         let (action, metric) = match rep.not_included_reason {
@@ -871,7 +918,8 @@ struct BatchMetrics {
     tpu_unchecked_len: Gauge,
     tpu_checked_len: Gauge,
     bundles_len: Gauge,
-    cu_in_flight: Gauge,
+    in_flight_cus: Gauge,
+    in_flight_locks: Gauge,
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
     recv_tpu_evict: Counter,
@@ -913,7 +961,8 @@ impl BatchMetrics {
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
             recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
             recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
-            cu_in_flight: gauge!("cu_in_flight"),
+            in_flight_cus: gauge!("in_flight_cus"),
+            in_flight_locks: gauge!("in_flight_locks"),
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
             check_err: counter!("check", "label" => "err"),
@@ -923,4 +972,10 @@ impl BatchMetrics {
             execute_err: counter!("execute", "label" => "err"),
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AccountLock {
+    Write(TransactionKey),
+    Read(HashSet<TransactionKey>),
 }
