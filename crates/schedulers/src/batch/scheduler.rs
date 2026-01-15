@@ -60,6 +60,7 @@ const MAX_CHECK_BATCHES: usize = 8;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
+const BUNDLE_EXPIRY: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 pub struct BatchSchedulerArgs {
@@ -78,7 +79,7 @@ pub struct BatchScheduler {
     tip_config: Option<TipConfig>,
     recent_blockhash: Hash,
     // TODO: Bundles should be sorted against transactions.
-    bundles: VecDeque<Vec<TransactionKey>>,
+    bundles: VecDeque<(Instant, Vec<TransactionKey>)>,
     unchecked_tx: MinMaxHeap<PriorityId>,
     checked_tx: BTreeSet<PriorityId>,
     executing_tx: HashSet<TransactionKey>,
@@ -155,6 +156,9 @@ impl BatchScheduler {
             true => self.drain_tpu(bridge, 128),
             false => self.drain_tpu(bridge, 1024),
         }
+
+        // Drop expired bundles.
+        self.drop_expired_bundles(bridge);
 
         // Drain pending jito messages.
         self.drain_jito(bridge);
@@ -475,7 +479,25 @@ impl BatchScheduler {
         }
 
         self.metrics.recv_bundle_ok.increment(1);
-        self.bundles.push_back(keys);
+        self.bundles.push_back((Instant::now(), keys));
+    }
+
+    fn drop_expired_bundles<B>(&mut self, bridge: &mut B)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let now = Instant::now();
+        while let Some((received_at, _)) = self.bundles.front() {
+            if now.duration_since(*received_at) <= BUNDLE_EXPIRY {
+                break;
+            }
+
+            let (_, bundle) = self.bundles.pop_front().unwrap();
+            self.metrics.recv_bundle_expired.increment(1);
+            for key in bundle {
+                bridge.tx_drop(key);
+            }
+        }
     }
 
     fn schedule_checks<B>(&mut self, bridge: &mut B)
@@ -548,7 +570,7 @@ impl BatchScheduler {
 
         // TEMP: Schedule all bundles.
         for _ in 0..bridge.worker(1).rem() {
-            let Some(bundle) = self.bundles.pop_front() else {
+            let Some((_, bundle)) = self.bundles.pop_front() else {
                 break;
             };
 
@@ -861,6 +883,7 @@ struct BatchMetrics {
     recv_bundle_ok: Counter,
     recv_bundle_err: Counter,
     recv_bundle_filtered: Counter,
+    recv_bundle_expired: Counter,
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
@@ -889,6 +912,7 @@ impl BatchMetrics {
             recv_bundle_ok: counter!("recv_bundle", "label" => "ok"),
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
             recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
+            recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
             cu_in_flight: gauge!("cu_in_flight"),
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
