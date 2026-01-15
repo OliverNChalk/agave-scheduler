@@ -653,7 +653,7 @@ impl BatchScheduler {
                                 .insert(*key, AccountLock::Write(id.key));
                             assert!(prev.is_none());
                         }
-                        for key in tx.write_locks() {
+                        for key in tx.read_locks() {
                             let AccountLock::Read(set) = self
                                 .in_flight_locks
                                 .entry_ref(key)
