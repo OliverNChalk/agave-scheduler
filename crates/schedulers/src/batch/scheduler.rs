@@ -641,13 +641,17 @@ impl BatchScheduler {
                             return false;
                         }
 
-                        // Try to lock this transaction.
-                        if Self::try_lock(&mut self.in_flight_locks, bridge, id.key).is_err() {
+                        // Check if this transaction's read/write locks conflict with any
+                        // pre-existing read/write locks.
+                        if !Self::can_lock(&mut self.in_flight_locks, bridge, id.key) {
                             self.checked_tx.insert(*id);
                             budget_remaining = 0;
 
                             return false;
                         }
+
+                        // Insert all the locks.
+                        Self::lock(&mut self.in_flight_locks, bridge, id.key);
 
                         // Update the budget as we are scheduling this TX.
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
@@ -814,26 +818,6 @@ impl BatchScheduler {
         metric.increment(1);
 
         TxDecision::Drop
-    }
-
-    fn try_lock<B>(
-        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
-        bridge: &mut B,
-        tx_key: TransactionKey,
-    ) -> Result<(), ()>
-    where
-        B: Bridge<Meta = PriorityId>,
-    {
-        // Check if this transaction's read/write locks conflict with any
-        // pre-existing read/write locks.
-        if !Self::can_lock(in_flight_locks, bridge, tx_key) {
-            return Err(());
-        }
-
-        // Insert all the locks.
-        Self::lock(in_flight_locks, bridge, tx_key);
-
-        Ok(())
     }
 
     /// Checks a TX for lock conflicts without inserting locks.
