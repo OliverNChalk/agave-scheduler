@@ -197,6 +197,9 @@ impl BatchScheduler {
             .locks_len
             .set(self.in_flight_locks.len() as f64);
         self.metrics
+            .executing_len
+            .set(self.executing_tx.len() as f64);
+        self.metrics
             .in_flight_cus
             .set(f64::from(self.in_flight_cus));
         self.metrics
@@ -331,7 +334,16 @@ impl BatchScheduler {
         for worker in 0..5 {
             while bridge.pop_worker(worker, |bridge, WorkerResponse { meta, response, .. }| {
                 match response {
-                    WorkerAction::Unprocessed => TxDecision::Keep,
+                    WorkerAction::Unprocessed => {
+                        // Release locks if this was an execute request.
+                        if self.executing_tx.remove(&meta.key) {
+                            Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
+                            self.in_flight_cus -= meta.cost;
+                            self.metrics.execute_unprocessed.increment(1);
+                        }
+
+                        TxDecision::Keep
+                    }
                     WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
                     WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
                 }
@@ -822,20 +834,7 @@ impl BatchScheduler {
         self.in_flight_cus -= meta.cost;
 
         // Remove in flight locks.
-        let tx = bridge.tx(meta.key);
-        for (lock, writable) in tx.locks() {
-            let EntryRef::Occupied(mut entry) = self.in_flight_locks.entry_ref(lock) else {
-                panic!();
-            };
-
-            // Remove the TX from the lock set.
-            entry.get_mut().remove(meta.key, writable);
-
-            // If the set is empty now, remove this write lock.
-            if entry.get().is_empty() {
-                entry.remove();
-            }
-        }
+        Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
 
         // Emit event and update metrics.
         let (action, metric) = match rep.not_included_reason {
@@ -882,6 +881,27 @@ impl BatchScheduler {
                 .entry_ref(addr)
                 .or_default()
                 .insert(tx_key, writable);
+        }
+    }
+
+    /// Unlocks a transaction, releasing all its locks.
+    ///
+    /// Panics if the transaction doesn't hold the expected locks.
+    fn unlock<B>(
+        in_flight_locks: &mut HashMap<Pubkey, AccountLockers>,
+        bridge: &B,
+        tx_key: TransactionKey,
+    ) where
+        B: Bridge,
+    {
+        for (addr, writable) in bridge.tx(tx_key).locks() {
+            let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
+                panic!();
+            };
+            entry.get_mut().remove(tx_key, writable);
+            if entry.get().is_empty() {
+                entry.remove();
+            }
         }
     }
 
@@ -967,6 +987,7 @@ struct BatchMetrics {
     tpu_checked_len: Gauge,
     bundles_len: Gauge,
     locks_len: Gauge,
+    executing_len: Gauge,
 
     in_flight_cus: Gauge,
     in_flight_locks: Gauge,
@@ -994,6 +1015,7 @@ struct BatchMetrics {
     execute_requested: Counter,
     execute_ok: Counter,
     execute_err: Counter,
+    execute_unprocessed: Counter,
 }
 
 impl BatchMetrics {
@@ -1006,6 +1028,7 @@ impl BatchMetrics {
             tpu_checked_len: gauge!("container_len", "label" => "tpu_checked"),
             bundles_len: gauge!("container_len", "label" => "bundles"),
             locks_len: gauge!("container_len", "label" => "locks"),
+            executing_len: gauge!("container_len", "label" => "executing"),
 
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
             recv_tpu_err: counter!("recv_tpu", "label" => "err"),
@@ -1033,6 +1056,7 @@ impl BatchMetrics {
             execute_requested: counter!("execute", "label" => "requested"),
             execute_ok: counter!("execute", "label" => "ok"),
             execute_err: counter!("execute", "label" => "err"),
+            execute_unprocessed: counter!("execute", "label" => "unprocessed"),
         }
     }
 }
