@@ -293,6 +293,8 @@ impl BatchScheduler {
             || !Self::can_lock(&self.in_flight_locks, bridge, change_tip_receiver)
         {
             warn!("Failed to grab locks for change tip receiver");
+            bridge.tx_drop(init_tip_distribution);
+            bridge.tx_drop(change_tip_receiver);
 
             return;
         }
