@@ -593,7 +593,7 @@ impl BatchScheduler {
     {
         // TEMP: Schedule all bundles.
         for _ in 0..bridge.worker(1).rem() {
-            let Some((_, bundle)) = self.bundles.pop_front() else {
+            let Some((_, bundle)) = self.bundles.front() else {
                 break;
             };
 
@@ -606,7 +606,7 @@ impl BatchScheduler {
             }
 
             // Take all the locks necessary for the bundle.
-            for tx_key in &bundle {
+            for tx_key in bundle {
                 Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
             }
 
@@ -627,6 +627,14 @@ impl BatchScheduler {
                     | execution_flags::DROP_ON_FAILURE
                     | execution_flags::ALL_OR_NOTHING,
             });
+
+            // Update metrics.
+            self.metrics
+                .execute_requested
+                .increment(bundle.len() as u64);
+
+            // Drop the bundle.
+            self.bundles.pop_front().unwrap();
         }
 
         debug_assert_eq!(bridge.progress().leader_state, LEADER_READY);
