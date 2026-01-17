@@ -88,7 +88,7 @@ pub struct BatchScheduler {
     executing_tx: HashSet<TransactionKey>,
     next_recheck: Option<PriorityId>,
     in_flight_cus: u32,
-    in_flight_locks: HashMap<Pubkey, AccountLock>,
+    in_flight_locks: HashMap<Pubkey, AccountLockers>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
     last_progress_time: Instant,
 
@@ -286,8 +286,8 @@ impl BatchScheduler {
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
         // Check if our batch can be locked.
-        if !Self::can_lock(&mut self.in_flight_locks, bridge, init_tip_distribution)
-            || !Self::can_lock(&mut self.in_flight_locks, bridge, change_tip_receiver)
+        if !Self::can_lock(&self.in_flight_locks, bridge, init_tip_distribution)
+            || !Self::can_lock(&self.in_flight_locks, bridge, change_tip_receiver)
         {
             warn!("Failed to grab locks for change tip receiver");
 
@@ -298,13 +298,12 @@ impl BatchScheduler {
         Self::lock(&mut self.in_flight_locks, bridge, init_tip_distribution);
         Self::lock(&mut self.in_flight_locks, bridge, change_tip_receiver);
 
-        self.in_flight_cus += 2;
         // TODO: Schedule as a single batch once we have SIMD83 live.
         bridge.schedule(ScheduleBatch {
             worker: BUNDLE_WORKER,
             transactions: &[KeyedTransactionMeta {
                 key: init_tip_distribution,
-                meta: PriorityId { priority: u64::MAX, cost: 1, key: init_tip_distribution },
+                meta: PriorityId { priority: u64::MAX, cost: 0, key: init_tip_distribution },
             }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
@@ -313,7 +312,7 @@ impl BatchScheduler {
             worker: BUNDLE_WORKER,
             transactions: &[KeyedTransactionMeta {
                 key: change_tip_receiver,
-                meta: PriorityId { priority: u64::MAX, cost: 1, key: change_tip_receiver },
+                meta: PriorityId { priority: u64::MAX, cost: 0, key: change_tip_receiver },
             }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
@@ -593,6 +592,20 @@ impl BatchScheduler {
                 break;
             };
 
+            // See if the bundle cann be scheduled without conflicts.
+            if !bundle
+                .iter()
+                .all(|tx_key| Self::can_lock(&self.in_flight_locks, bridge, *tx_key))
+            {
+                break;
+            }
+
+            // Take all the locks necessary for the bundle.
+            for tx_key in &bundle {
+                Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
+            }
+
+            // Clear old data & build the batch.
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(bundle.iter().map(|key| KeyedTransactionMeta {
@@ -600,6 +613,7 @@ impl BatchScheduler {
                     meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
                 }));
 
+            // Schedule 1 bundle as 1 batch.
             bridge.schedule(ScheduleBatch {
                 worker: BUNDLE_WORKER,
                 transactions: &self.schedule_batch,
@@ -630,6 +644,7 @@ impl BatchScheduler {
                 continue;
             }
 
+            // Our logic for selecting the next TX to schedule.
             let pop_next = || {
                 self.checked_tx
                     .pop_last()
@@ -643,7 +658,7 @@ impl BatchScheduler {
 
                         // Check if this transaction's read/write locks conflict with any
                         // pre-existing read/write locks.
-                        if !Self::can_lock(&mut self.in_flight_locks, bridge, id.key) {
+                        if !Self::can_lock(&self.in_flight_locks, bridge, id.key) {
                             self.checked_tx.insert(*id);
                             budget_remaining = 0;
 
@@ -665,6 +680,7 @@ impl BatchScheduler {
                     .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
             };
 
+            // Clear any old data & build the batch.
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
@@ -822,7 +838,7 @@ impl BatchScheduler {
 
     /// Checks a TX for lock conflicts without inserting locks.
     fn can_lock<B>(
-        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
+        in_flight_locks: &HashMap<Pubkey, AccountLockers>,
         bridge: &mut B,
         tx_key: TransactionKey,
     ) -> bool
@@ -833,15 +849,14 @@ impl BatchScheduler {
         // pre-existing read/write locks.
         bridge.tx(tx_key).locks().all(|(addr, writable)| {
             in_flight_locks
-                .entry_ref(addr)
-                .or_default()
-                .can_lock(writable)
+                .get(addr)
+                .is_none_or(|lockers| lockers.can_lock(writable))
         })
     }
 
     /// Locks a transaction without checking for conflicts.
     fn lock<B>(
-        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
+        in_flight_locks: &mut HashMap<Pubkey, AccountLockers>,
         bridge: &mut B,
         tx_key: TransactionKey,
     ) where
@@ -992,12 +1007,12 @@ impl BatchMetrics {
 }
 
 #[derive(Debug, Default)]
-struct AccountLock {
+struct AccountLockers {
     writers: Vec<TransactionKey>,
     readers: Vec<TransactionKey>,
 }
 
-impl AccountLock {
+impl AccountLockers {
     const fn is_empty(&self) -> bool {
         self.writers.is_empty() && self.readers.is_empty()
     }
