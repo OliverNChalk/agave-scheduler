@@ -306,6 +306,10 @@ impl BatchScheduler {
         Self::lock(&mut self.in_flight_locks, bridge, init_tip_distribution);
         Self::lock(&mut self.in_flight_locks, bridge, change_tip_receiver);
 
+        // Set these transactions as executing.
+        assert!(self.executing_tx.insert(init_tip_distribution));
+        assert!(self.executing_tx.insert(change_tip_receiver));
+
         // TODO: Schedule as a single batch once we have SIMD83 live.
         bridge.schedule(ScheduleBatch {
             worker: BUNDLE_WORKER,
@@ -340,6 +344,7 @@ impl BatchScheduler {
                             Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
                             self.in_flight_cus -= meta.cost;
                             self.metrics.execute_unprocessed.increment(1);
+                            self.checked_tx.insert(meta);
                         }
 
                         TxDecision::Keep
@@ -619,9 +624,10 @@ impl BatchScheduler {
                 break;
             }
 
-            // Take all the locks necessary for the bundle.
+            // Take all the locks & decdlare the TXs as executing.
             for tx_key in bundle {
                 Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
+                assert!(self.executing_tx.insert(*tx_key));
             }
 
             // Clear old data & build the batch.
@@ -828,7 +834,7 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         // Remove from executing set now that execution is complete.
-        self.executing_tx.remove(&meta.key);
+        assert!(self.executing_tx.remove(&meta.key));
 
         // Remove in-flight costs.
         self.in_flight_cus -= meta.cost;
