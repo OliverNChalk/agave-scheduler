@@ -1018,13 +1018,10 @@ impl AccountLockers {
     }
 
     fn can_lock(&self, writable: bool) -> bool {
-        matches!(
-            (self.writers.is_empty(), self.readers.is_empty(), writable),
-            // No writers or readers => can lock.
-            (true, true, _)
-            // No writers and adding a reader => can lock.
-            | (true, false, false)
-        )
+        match writable {
+            true => self.is_empty(),
+            false => self.writers.is_empty(),
+        }
     }
 
     fn insert(&mut self, tx_key: TransactionKey, writable: bool) {
