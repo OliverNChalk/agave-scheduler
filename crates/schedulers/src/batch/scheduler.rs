@@ -35,7 +35,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 use toolbox::shutdown::Shutdown;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
@@ -88,7 +88,7 @@ pub struct BatchScheduler {
     executing_tx: HashSet<TransactionKey>,
     next_recheck: Option<PriorityId>,
     in_flight_cus: u32,
-    in_flight_locks: HashMap<Pubkey, AccountLock>,
+    in_flight_locks: HashMap<Pubkey, AccountLockers>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
     last_progress_time: Instant,
 
@@ -285,13 +285,25 @@ impl BatchScheduler {
         );
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
 
-        self.in_flight_cus += 2;
+        // Check if our batch can be locked.
+        if !Self::can_lock(&self.in_flight_locks, bridge, init_tip_distribution)
+            || !Self::can_lock(&self.in_flight_locks, bridge, change_tip_receiver)
+        {
+            warn!("Failed to grab locks for change tip receiver");
+
+            return;
+        }
+
+        // Lock our batch (Self::lock allows us to create overlapping write locks).
+        Self::lock(&mut self.in_flight_locks, bridge, init_tip_distribution);
+        Self::lock(&mut self.in_flight_locks, bridge, change_tip_receiver);
+
         // TODO: Schedule as a single batch once we have SIMD83 live.
         bridge.schedule(ScheduleBatch {
             worker: BUNDLE_WORKER,
             transactions: &[KeyedTransactionMeta {
                 key: init_tip_distribution,
-                meta: PriorityId { priority: u64::MAX, cost: 1, key: init_tip_distribution },
+                meta: PriorityId { priority: u64::MAX, cost: 0, key: init_tip_distribution },
             }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
@@ -300,7 +312,7 @@ impl BatchScheduler {
             worker: BUNDLE_WORKER,
             transactions: &[KeyedTransactionMeta {
                 key: change_tip_receiver,
-                meta: PriorityId { priority: u64::MAX, cost: 1, key: change_tip_receiver },
+                meta: PriorityId { priority: u64::MAX, cost: 0, key: change_tip_receiver },
             }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
@@ -580,6 +592,20 @@ impl BatchScheduler {
                 break;
             };
 
+            // See if the bundle cann be scheduled without conflicts.
+            if !bundle
+                .iter()
+                .all(|tx_key| Self::can_lock(&self.in_flight_locks, bridge, *tx_key))
+            {
+                break;
+            }
+
+            // Take all the locks necessary for the bundle.
+            for tx_key in &bundle {
+                Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
+            }
+
+            // Clear old data & build the batch.
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(bundle.iter().map(|key| KeyedTransactionMeta {
@@ -587,6 +613,7 @@ impl BatchScheduler {
                     meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
                 }));
 
+            // Schedule 1 bundle as 1 batch.
             bridge.schedule(ScheduleBatch {
                 worker: BUNDLE_WORKER,
                 transactions: &self.schedule_batch,
@@ -617,6 +644,7 @@ impl BatchScheduler {
                 continue;
             }
 
+            // Our logic for selecting the next TX to schedule.
             let pop_next = || {
                 self.checked_tx
                     .pop_last()
@@ -628,13 +656,17 @@ impl BatchScheduler {
                             return false;
                         }
 
-                        // Try to lock this transaction.
-                        if Self::try_lock(&mut self.in_flight_locks, bridge, id).is_err() {
+                        // Check if this transaction's read/write locks conflict with any
+                        // pre-existing read/write locks.
+                        if !Self::can_lock(&self.in_flight_locks, bridge, id.key) {
                             self.checked_tx.insert(*id);
                             budget_remaining = 0;
 
                             return false;
                         }
+
+                        // Insert all the locks.
+                        Self::lock(&mut self.in_flight_locks, bridge, id.key);
 
                         // Update the budget as we are scheduling this TX.
                         budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
@@ -648,6 +680,7 @@ impl BatchScheduler {
                     .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
             };
 
+            // Clear any old data & build the batch.
             self.schedule_batch.clear();
             self.schedule_batch
                 .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
@@ -775,23 +808,16 @@ impl BatchScheduler {
 
         // Remove in flight locks.
         let tx = bridge.tx(meta.key);
-        for write in tx.write_locks() {
-            let lock = self.in_flight_locks.remove(write).unwrap();
-            assert_eq!(lock, AccountLock::Write(meta.key));
-        }
-        for read in tx.read_locks() {
-            let EntryRef::Occupied(mut entry) = self.in_flight_locks.entry_ref(read) else {
+        for (lock, writable) in tx.locks() {
+            let EntryRef::Occupied(mut entry) = self.in_flight_locks.entry_ref(lock) else {
                 panic!();
             };
 
-            // Remove our TX from the read set.
-            let AccountLock::Read(set) = entry.get_mut() else {
-                panic!();
-            };
-            assert!(set.remove(&meta.key));
+            // Remove our TX from the write set.
+            entry.get_mut().remove(meta.key, writable);
 
-            // If thei set is empty now, remove this read lock.
-            if set.is_empty() {
+            // If the set is empty now, remove this write lock.
+            if entry.get().is_empty() {
                 entry.remove();
             }
         }
@@ -810,45 +836,38 @@ impl BatchScheduler {
         TxDecision::Drop
     }
 
-    fn try_lock<B>(
-        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
+    /// Checks a TX for lock conflicts without inserting locks.
+    fn can_lock<B>(
+        in_flight_locks: &HashMap<Pubkey, AccountLockers>,
         bridge: &mut B,
-        id: &PriorityId,
-    ) -> Result<(), ()>
+        tx_key: TransactionKey,
+    ) -> bool
     where
-        B: Bridge<Meta = PriorityId>,
+        B: Bridge,
     {
         // Check if this transaction's read/write locks conflict with any
         // pre-existing read/write locks.
-        let tx = bridge.tx(id.key);
-        if tx
-            .write_locks()
-            .any(|key| in_flight_locks.contains_key(key))
-            || tx.read_locks().any(|key| {
-                in_flight_locks
-                    .get(key)
-                    .is_some_and(|lock| matches!(lock, AccountLock::Write(_)))
-            })
-        {
-            return Err(());
-        }
+        bridge.tx(tx_key).locks().all(|(addr, writable)| {
+            in_flight_locks
+                .get(addr)
+                .is_none_or(|lockers| lockers.can_lock(writable))
+        })
+    }
 
-        // Insert all the locks.
-        for key in tx.write_locks() {
-            let prev = in_flight_locks.insert(*key, AccountLock::Write(id.key));
-            assert!(prev.is_none());
+    /// Locks a transaction without checking for conflicts.
+    fn lock<B>(
+        in_flight_locks: &mut HashMap<Pubkey, AccountLockers>,
+        bridge: &mut B,
+        tx_key: TransactionKey,
+    ) where
+        B: Bridge,
+    {
+        for (addr, writable) in bridge.tx(tx_key).locks() {
+            in_flight_locks
+                .entry_ref(addr)
+                .or_default()
+                .insert(tx_key, writable);
         }
-        for key in tx.read_locks() {
-            let AccountLock::Read(set) = in_flight_locks
-                .entry_ref(key)
-                .or_insert_with(|| AccountLock::Read(HashSet::new()))
-            else {
-                panic!();
-            };
-            assert!(set.insert(id.key));
-        }
-
-        Ok(())
     }
 
     fn calculate_priority(
@@ -987,8 +1006,37 @@ impl BatchMetrics {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum AccountLock {
-    Write(TransactionKey),
-    Read(HashSet<TransactionKey>),
+#[derive(Debug, Default)]
+struct AccountLockers {
+    writers: HashSet<TransactionKey>,
+    readers: HashSet<TransactionKey>,
+}
+
+impl AccountLockers {
+    fn is_empty(&self) -> bool {
+        self.writers.is_empty() && self.readers.is_empty()
+    }
+
+    fn can_lock(&self, writable: bool) -> bool {
+        match writable {
+            true => self.is_empty(),
+            false => self.writers.is_empty(),
+        }
+    }
+
+    fn insert(&mut self, tx_key: TransactionKey, writable: bool) {
+        let set = match writable {
+            true => &mut self.writers,
+            false => &mut self.readers,
+        };
+        assert!(set.insert(tx_key));
+    }
+
+    fn remove(&mut self, tx_key: TransactionKey, writable: bool) {
+        let set = match writable {
+            true => &mut self.writers,
+            false => &mut self.readers,
+        };
+        assert!(set.remove(&tx_key));
+    }
 }
