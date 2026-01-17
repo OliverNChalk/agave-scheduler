@@ -624,7 +624,7 @@ impl BatchScheduler {
                 break;
             }
 
-            // Take all the locks & decdlare the TXs as executing.
+            // Take all the locks & declare the TXs as executing.
             for tx_key in bundle {
                 Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
                 assert!(self.executing_tx.insert(*tx_key));
