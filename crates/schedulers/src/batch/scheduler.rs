@@ -828,7 +828,7 @@ impl BatchScheduler {
                 panic!();
             };
 
-            // Remove our TX from the write set.
+            // Remove the TX from the lock set.
             entry.get_mut().remove(meta.key, writable);
 
             // If the set is empty now, remove this write lock.
