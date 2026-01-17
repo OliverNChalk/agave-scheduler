@@ -194,6 +194,9 @@ impl BatchScheduler {
             .set(self.checked_tx.len() as f64);
         self.metrics.bundles_len.set(self.bundles.len() as f64);
         self.metrics
+            .locks_len
+            .set(self.in_flight_locks.len() as f64);
+        self.metrics
             .in_flight_cus
             .set(f64::from(self.in_flight_cus));
         self.metrics
@@ -947,27 +950,35 @@ impl BatchScheduler {
 struct BatchMetrics {
     current_slot: Gauge,
     next_leader_slot: Gauge,
+
     tpu_unchecked_len: Gauge,
     tpu_checked_len: Gauge,
     bundles_len: Gauge,
+    locks_len: Gauge,
+
     in_flight_cus: Gauge,
     in_flight_locks: Gauge,
+
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
     recv_tpu_evict: Counter,
     recv_tpu_filtered: Counter,
+
     recv_packet_ok: Counter,
     recv_packet_err: Counter,
     recv_packet_evict: Counter,
     recv_packet_filtered: Counter,
+
     recv_bundle_ok: Counter,
     recv_bundle_err: Counter,
     recv_bundle_filtered: Counter,
     recv_bundle_expired: Counter,
+
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
     check_evict: Counter,
+
     execute_requested: Counter,
     execute_ok: Counter,
     execute_err: Counter,
@@ -978,27 +989,35 @@ impl BatchMetrics {
         Self {
             current_slot: gauge!("slot", "label" => "current"),
             next_leader_slot: gauge!("slot", "label" => "next_leader"),
+
             tpu_unchecked_len: gauge!("container_len", "label" => "tpu_unchecked"),
             tpu_checked_len: gauge!("container_len", "label" => "tpu_checked"),
             bundles_len: gauge!("container_len", "label" => "bundles"),
+            locks_len: gauge!("container_len", "label" => "locks"),
+
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
             recv_tpu_err: counter!("recv_tpu", "label" => "err"),
             recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
             recv_tpu_filtered: counter!("recv_tpu", "label" => "filtered"),
+
             recv_packet_ok: counter!("recv_packet", "label" => "ok"),
             recv_packet_err: counter!("recv_packet", "label" => "err"),
             recv_packet_evict: counter!("recv_packet", "label" => "evict"),
             recv_packet_filtered: counter!("recv_packet", "label" => "filtered"),
+
             recv_bundle_ok: counter!("recv_bundle", "label" => "ok"),
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
             recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
             recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
+
             in_flight_cus: gauge!("in_flight_cus"),
             in_flight_locks: gauge!("in_flight_locks"),
+
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
             check_err: counter!("check", "label" => "err"),
             check_evict: counter!("check", "label" => "evict"),
+
             execute_requested: counter!("execute", "label" => "requested"),
             execute_ok: counter!("execute", "label" => "ok"),
             execute_err: counter!("execute", "label" => "err"),
