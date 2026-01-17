@@ -47,6 +47,7 @@ pub enum TransactionAction {
     ExecuteReq,
     ExecuteOk,
     ExecuteErr { reason: u32 },
+    ExecuteUnprocessed,
     Evict { reason: EvictReason },
 }
 

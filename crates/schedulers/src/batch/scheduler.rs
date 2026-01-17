@@ -343,6 +343,12 @@ impl BatchScheduler {
                         if self.executing_tx.remove(&meta.key) {
                             Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
                             self.in_flight_cus -= meta.cost;
+                            self.emit_tx_event(
+                                bridge,
+                                meta.key,
+                                meta.priority,
+                                TransactionAction::ExecuteUnprocessed,
+                            );
                             self.metrics.execute_unprocessed.increment(1);
                             self.checked_tx.insert(meta);
                         }
