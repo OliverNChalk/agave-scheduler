@@ -1021,9 +1021,9 @@ impl AccountLockers {
         matches!(
             (self.writers.is_empty(), self.readers.is_empty(), writable),
             // No writers or readers => can lock.
-            (false, false, _)
+            (true, true, _)
             // No writers and adding a reader => can lock.
-            | (false, true, false)
+            | (true, false, false)
         )
     }
 
