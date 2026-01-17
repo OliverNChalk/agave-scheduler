@@ -599,7 +599,7 @@ impl BatchScheduler {
                 break;
             };
 
-            // See if the bundle cann be scheduled without conflicts.
+            // See if the bundle can be scheduled without conflicts.
             if !bundle
                 .iter()
                 .all(|tx_key| Self::can_lock(&self.in_flight_locks, bridge, *tx_key))
