@@ -502,8 +502,8 @@ impl BatchScheduler {
         }
 
         self.metrics.recv_bundle_ok.increment(1);
-        // TODO: If Jito sends us a bundle with overlapping read/write keys we will
-        // panic as normally CHECK prevents this.
+        // TODO: If Jito sends us a transaction (not a bundle) with overlapping
+        // read/write keys we will panic as normally CHECK prevents this.
         self.bundles.push_back((Instant::now(), keys));
     }
 
