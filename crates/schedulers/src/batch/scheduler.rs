@@ -628,40 +628,12 @@ impl BatchScheduler {
                             return false;
                         }
 
-                        // Check if this transaction's read/write locks conflict with any
-                        // pre-existing read/write locks.
-                        let tx = bridge.tx(id.key);
-                        if tx
-                            .write_locks()
-                            .any(|key| self.in_flight_locks.contains_key(key))
-                            || tx.read_locks().any(|key| {
-                                self.in_flight_locks
-                                    .get(key)
-                                    .is_some_and(|lock| matches!(lock, AccountLock::Write(_)))
-                            })
-                        {
+                        // Try to lock this transaction.
+                        if Self::try_lock(&mut self.in_flight_locks, bridge, id).is_err() {
                             self.checked_tx.insert(*id);
                             budget_remaining = 0;
 
                             return false;
-                        }
-
-                        // Insert all the locks.
-                        for key in tx.write_locks() {
-                            let prev = self
-                                .in_flight_locks
-                                .insert(*key, AccountLock::Write(id.key));
-                            assert!(prev.is_none());
-                        }
-                        for key in tx.read_locks() {
-                            let AccountLock::Read(set) = self
-                                .in_flight_locks
-                                .entry_ref(key)
-                                .or_insert_with(|| AccountLock::Read(HashSet::new()))
-                            else {
-                                panic!();
-                            };
-                            assert!(set.insert(id.key));
                         }
 
                         // Update the budget as we are scheduling this TX.
@@ -836,6 +808,47 @@ impl BatchScheduler {
         metric.increment(1);
 
         TxDecision::Drop
+    }
+
+    fn try_lock<B>(
+        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
+        bridge: &mut B,
+        id: &PriorityId,
+    ) -> Result<(), ()>
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        // Check if this transaction's read/write locks conflict with any
+        // pre-existing read/write locks.
+        let tx = bridge.tx(id.key);
+        if tx
+            .write_locks()
+            .any(|key| in_flight_locks.contains_key(key))
+            || tx.read_locks().any(|key| {
+                in_flight_locks
+                    .get(key)
+                    .is_some_and(|lock| matches!(lock, AccountLock::Write(_)))
+            })
+        {
+            return Err(());
+        }
+
+        // Insert all the locks.
+        for key in tx.write_locks() {
+            let prev = in_flight_locks.insert(*key, AccountLock::Write(id.key));
+            assert!(prev.is_none());
+        }
+        for key in tx.read_locks() {
+            let AccountLock::Read(set) = in_flight_locks
+                .entry_ref(key)
+                .or_insert_with(|| AccountLock::Read(HashSet::new()))
+            else {
+                panic!();
+            };
+            assert!(set.insert(id.key));
+        }
+
+        Ok(())
     }
 
     fn calculate_priority(
