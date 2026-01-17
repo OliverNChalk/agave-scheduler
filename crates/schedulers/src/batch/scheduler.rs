@@ -35,7 +35,7 @@ use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 use toolbox::shutdown::Shutdown;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
@@ -284,6 +284,19 @@ impl BatchScheduler {
             self.recent_blockhash,
         );
         let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
+
+        // Check if our batch can be locked.
+        if !Self::can_lock(&mut self.in_flight_locks, bridge, init_tip_distribution)
+            || !Self::can_lock(&mut self.in_flight_locks, bridge, change_tip_receiver)
+        {
+            warn!("Failed to grab locks for change tip receiver");
+
+            return;
+        }
+
+        // Lock our batch (Self::lock allows us to create overlapping write locks).
+        Self::lock(&mut self.in_flight_locks, bridge, init_tip_distribution);
+        Self::lock(&mut self.in_flight_locks, bridge, change_tip_receiver);
 
         self.in_flight_cus += 2;
         // TODO: Schedule as a single batch once we have SIMD83 live.
@@ -629,7 +642,7 @@ impl BatchScheduler {
                         }
 
                         // Try to lock this transaction.
-                        if Self::try_lock(&mut self.in_flight_locks, bridge, id).is_err() {
+                        if Self::try_lock(&mut self.in_flight_locks, bridge, id.key).is_err() {
                             self.checked_tx.insert(*id);
                             budget_remaining = 0;
 
@@ -775,23 +788,16 @@ impl BatchScheduler {
 
         // Remove in flight locks.
         let tx = bridge.tx(meta.key);
-        for write in tx.write_locks() {
-            let lock = self.in_flight_locks.remove(write).unwrap();
-            assert_eq!(lock, AccountLock::Write(meta.key));
-        }
-        for read in tx.read_locks() {
-            let EntryRef::Occupied(mut entry) = self.in_flight_locks.entry_ref(read) else {
+        for (lock, writable) in tx.locks() {
+            let EntryRef::Occupied(mut entry) = self.in_flight_locks.entry_ref(lock) else {
                 panic!();
             };
 
-            // Remove our TX from the read set.
-            let AccountLock::Read(set) = entry.get_mut() else {
-                panic!();
-            };
-            assert!(set.remove(&meta.key));
+            // Remove our TX from the write set.
+            entry.get_mut().remove(meta.key, writable);
 
-            // If thei set is empty now, remove this read lock.
-            if set.is_empty() {
+            // If the set is empty now, remove this write lock.
+            if entry.get().is_empty() {
                 entry.remove();
             }
         }
@@ -813,42 +819,56 @@ impl BatchScheduler {
     fn try_lock<B>(
         in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
         bridge: &mut B,
-        id: &PriorityId,
+        tx_key: TransactionKey,
     ) -> Result<(), ()>
     where
         B: Bridge<Meta = PriorityId>,
     {
         // Check if this transaction's read/write locks conflict with any
         // pre-existing read/write locks.
-        let tx = bridge.tx(id.key);
-        if tx
-            .write_locks()
-            .any(|key| in_flight_locks.contains_key(key))
-            || tx.read_locks().any(|key| {
-                in_flight_locks
-                    .get(key)
-                    .is_some_and(|lock| matches!(lock, AccountLock::Write(_)))
-            })
-        {
+        if !Self::can_lock(in_flight_locks, bridge, tx_key) {
             return Err(());
         }
 
         // Insert all the locks.
-        for key in tx.write_locks() {
-            let prev = in_flight_locks.insert(*key, AccountLock::Write(id.key));
-            assert!(prev.is_none());
-        }
-        for key in tx.read_locks() {
-            let AccountLock::Read(set) = in_flight_locks
-                .entry_ref(key)
-                .or_insert_with(|| AccountLock::Read(HashSet::new()))
-            else {
-                panic!();
-            };
-            assert!(set.insert(id.key));
-        }
+        Self::lock(in_flight_locks, bridge, tx_key);
 
         Ok(())
+    }
+
+    /// Checks a TX for lock conflicts without inserting locks.
+    fn can_lock<B>(
+        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
+        bridge: &mut B,
+        tx_key: TransactionKey,
+    ) -> bool
+    where
+        B: Bridge,
+    {
+        // Check if this transaction's read/write locks conflict with any
+        // pre-existing read/write locks.
+        bridge.tx(tx_key).locks().all(|(addr, writable)| {
+            in_flight_locks
+                .entry_ref(addr)
+                .or_default()
+                .can_lock(writable)
+        })
+    }
+
+    /// Locks a transaction without checking for conflicts.
+    fn lock<B>(
+        in_flight_locks: &mut HashMap<Pubkey, AccountLock>,
+        bridge: &mut B,
+        tx_key: TransactionKey,
+    ) where
+        B: Bridge,
+    {
+        for (addr, writable) in bridge.tx(tx_key).locks() {
+            in_flight_locks
+                .entry_ref(addr)
+                .or_default()
+                .insert(tx_key, writable);
+        }
     }
 
     fn calculate_priority(
@@ -987,8 +1007,40 @@ impl BatchMetrics {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum AccountLock {
-    Write(TransactionKey),
-    Read(HashSet<TransactionKey>),
+#[derive(Debug, Default)]
+struct AccountLock {
+    writers: Vec<TransactionKey>,
+    readers: Vec<TransactionKey>,
+}
+
+impl AccountLock {
+    const fn is_empty(&self) -> bool {
+        self.writers.is_empty() && self.readers.is_empty()
+    }
+
+    const fn can_lock(&self, writable: bool) -> bool {
+        matches!(
+            (self.writers.is_empty(), self.readers.is_empty(), writable),
+            // No writers or readers => can lock.
+            (false, false, _)
+            // No writers and adding a reader => can lock.
+            | (false, true, false)
+        )
+    }
+
+    fn insert(&mut self, tx_key: TransactionKey, writable: bool) {
+        match writable {
+            true => self.writers.push(tx_key),
+            false => self.readers.push(tx_key),
+        }
+    }
+
+    fn remove(&mut self, tx_key: TransactionKey, writable: bool) {
+        let set = match writable {
+            true => &mut self.writers,
+            false => &mut self.readers,
+        };
+        let pos = set.iter().position(|locker| *locker == tx_key).unwrap();
+        set.swap_remove(pos);
+    }
 }
