@@ -753,6 +753,11 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
+        // If transaction is currently executing, ignore the recheck result.
+        if self.executing_tx.contains(&meta.key) {
+            return TxDecision::Keep;
+        }
+
         let parsing_failed =
             rep.parsing_and_sanitization_flags & parsing_and_sanitization_flags::FAILED != 0;
         let resolve_failed = rep.resolve_flags & resolve_flags::FAILED != 0;
@@ -793,15 +798,6 @@ impl BatchScheduler {
         );
         assert_ne!(rep.status_check_flags & status_check_flags::REQUESTED, 0, "{rep:?}");
         assert_ne!(rep.status_check_flags & status_check_flags::PERFORMED, 0, "{rep:?}");
-
-        // Don't insert if transaction is currently executing. This can happen when a
-        // recheck returns after execution was scheduled but before it completed.
-        // Execution will handle cleanup.
-        if self.executing_tx.contains(&meta.key) {
-            self.metrics.check_ok.increment(1);
-
-            return TxDecision::Keep;
-        }
 
         // If already in checked_tx, this is a recheck completing - nothing to do.
         if self.checked_tx.contains(&meta) {
