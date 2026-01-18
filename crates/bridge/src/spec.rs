@@ -103,6 +103,12 @@ pub struct TransactionState {
 }
 
 impl TransactionState {
+    pub fn locks(&self) -> impl Iterator<Item = (&Pubkey, bool)> {
+        self.write_locks()
+            .map(|lock| (lock, true))
+            .chain(self.read_locks().map(|lock| (lock, false)))
+    }
+
     pub fn write_locks(&self) -> impl Iterator<Item = &Pubkey> {
         self.data
             .static_account_keys()

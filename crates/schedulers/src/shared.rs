@@ -1,6 +1,6 @@
 use agave_bridge::TransactionKey;
 
-pub(crate) const TARGET_BATCH_SIZE: usize = 16;
+pub(crate) const TARGET_BATCH_SIZE: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
