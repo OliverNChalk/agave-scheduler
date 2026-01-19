@@ -202,9 +202,6 @@ impl BatchScheduler {
         self.metrics
             .in_flight_cus
             .set(f64::from(self.in_flight_cus));
-        self.metrics
-            .in_flight_locks
-            .set(self.in_flight_locks.len() as f64);
     }
 
     fn check_slot_roll<B>(&mut self, bridge: &mut B)
@@ -998,7 +995,6 @@ struct BatchMetrics {
     executing_len: Gauge,
 
     in_flight_cus: Gauge,
-    in_flight_locks: Gauge,
 
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
@@ -1054,7 +1050,6 @@ impl BatchMetrics {
             recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
 
             in_flight_cus: gauge!("in_flight_cus"),
-            in_flight_locks: gauge!("in_flight_locks"),
 
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
