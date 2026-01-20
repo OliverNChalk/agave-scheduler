@@ -39,8 +39,8 @@ use tracing::{info, warn};
 
 use crate::batch::jito_thread::{BuilderConfig, JitoArgs, JitoThread, JitoUpdate, TipConfig};
 use crate::batch::tip_program::{
-    ChangeTipReceiverArgs, TIP_PAYMENT_PROGRAM, TipDistributionArgs, change_tip_receiver,
-    init_tip_distribution,
+    ChangeTipReceiverArgs, TIP_ACCOUNTS, TIP_PAYMENT_PROGRAM, TipDistributionArgs,
+    change_tip_receiver, init_tip_distribution,
 };
 use crate::events::{
     CheckFailure, Event, EventEmitter, EvictReason, SlotStatsEvent, TransactionAction,
@@ -48,8 +48,11 @@ use crate::events::{
 };
 use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
 
+const PRIORITY_MULTIPLIER: u64 = 1_000_000;
+
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
+const BUNDLE_CAPACITY: usize = 1024;
 
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
@@ -81,8 +84,7 @@ pub struct BatchScheduler {
     builder_config: BuilderConfig,
     tip_config: Option<TipConfig>,
     recent_blockhash: Hash,
-    // TODO: Bundles should be sorted against transactions.
-    bundles: VecDeque<(Instant, Vec<TransactionKey>)>,
+    bundles: BTreeSet<BundleId>,
     unchecked_tx: MinMaxHeap<PriorityId>,
     checked_tx: BTreeSet<PriorityId>,
     executing_tx: HashSet<TransactionKey>,
@@ -124,7 +126,7 @@ impl BatchScheduler {
                 builder_config,
                 tip_config: None,
                 recent_blockhash: Hash::default(),
-                bundles: VecDeque::new(),
+                bundles: BTreeSet::new(),
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked_tx: BTreeSet::new(),
                 executing_tx: HashSet::new(),
@@ -484,18 +486,40 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         let mut keys = Vec::with_capacity(bundle.len());
+        let mut total_cost: u64 = 0;
+        let mut total_reward: u64 = 0;
+
         for packet in bundle {
             let Ok(key) = bridge.tx_insert(&packet) else {
                 for key in keys {
                     bridge.tx_drop(key);
                 }
-
                 self.metrics.recv_bundle_err.increment(1);
 
                 return;
             };
 
+            // Add to our bundle keys.
             keys.push(key);
+
+            // Calculate cost and reward for this transaction.
+            let Some((cost, reward)) =
+                Self::calculate_cost_and_reward(bridge.runtime(), &bridge.tx(key).data)
+            else {
+                for key in keys {
+                    bridge.tx_drop(key);
+                }
+                self.metrics.recv_bundle_err.increment(1);
+
+                return;
+            };
+
+            // Extract tip from this transaction.
+            let tip = Self::extract_tip(&bridge.tx(key).data);
+
+            // Accumulate totals.
+            total_cost += cost;
+            total_reward += reward + tip;
         }
 
         // Filter bundles containing transactions that write to tip accounts.
@@ -508,6 +532,12 @@ impl BatchScheduler {
             return;
         }
 
+        // Calculate bundle priority.
+        let priority = total_reward
+            .saturating_mul(PRIORITY_MULTIPLIER)
+            .checked_div(std::cmp::max(total_cost, 1))
+            .unwrap_or(0);
+
         // Emit ingest events for bundle transactions.
         let bundle_sig = bridge.tx(keys[0]).data.signatures()[0];
         let bundle_id = Arc::new(bundle_sig.to_string());
@@ -515,7 +545,7 @@ impl BatchScheduler {
             self.emit_tx_event(
                 bridge,
                 key,
-                u64::MAX,
+                priority,
                 TransactionAction::Ingest {
                     source: TransactionSource::Jito,
                     bundle: Some(bundle_id.clone()),
@@ -523,10 +553,20 @@ impl BatchScheduler {
             );
         }
 
+        // Evict lowest priority bundle if at capacity.
+        if self.bundles.len() == BUNDLE_CAPACITY {
+            let evicted = self.bundles.pop_first().unwrap();
+            for key in evicted.keys {
+                bridge.tx_drop(key);
+            }
+            self.metrics.recv_bundle_evict.increment(1);
+        }
+
         self.metrics.recv_bundle_ok.increment(1);
         // TODO: If Jito sends us a transaction (not a bundle) with overlapping
         // read/write keys we will panic as normally CHECK prevents this.
-        self.bundles.push_back((Instant::now(), keys));
+        self.bundles
+            .insert(BundleId { priority, received_at: Instant::now(), keys });
     }
 
     fn drop_expired_bundles<B>(&mut self, bridge: &mut B)
@@ -534,14 +574,19 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         let now = Instant::now();
-        while let Some((received_at, _)) = self.bundles.front() {
-            if now.duration_since(*received_at) <= BUNDLE_EXPIRY {
-                break;
-            }
+        // Retain only non-expired bundles, dropping expired ones.
+        let expired: Vec<_> = self
+            .bundles
+            .iter()
+            .filter(|b| now.duration_since(b.received_at) > BUNDLE_EXPIRY)
+            .cloned()
+            // TODO: Need an ExtractIf to avoid this BS alloc.
+            .collect();
 
-            let (_, bundle) = self.bundles.pop_front().unwrap();
+        for bundle in expired {
+            self.bundles.remove(&bundle);
             self.metrics.recv_bundle_expired.increment(1);
-            for key in bundle {
+            for key in bundle.keys {
                 bridge.tx_drop(key);
             }
         }
@@ -613,53 +658,6 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        // TEMP: Schedule all bundles.
-        for _ in 0..bridge.worker(BUNDLE_WORKER).rem() {
-            let Some((_, bundle)) = self.bundles.front() else {
-                break;
-            };
-
-            // See if the bundle can be scheduled without conflicts.
-            if !bundle
-                .iter()
-                .all(|tx_key| Self::can_lock(&self.in_flight_locks, bridge, *tx_key))
-            {
-                break;
-            }
-
-            // Take all the locks & declare the TXs as executing.
-            for tx_key in bundle {
-                Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
-                assert!(self.executing_tx.insert(*tx_key));
-            }
-
-            // Clear old data & build the batch.
-            self.schedule_batch.clear();
-            self.schedule_batch
-                .extend(bundle.iter().map(|key| KeyedTransactionMeta {
-                    key: *key,
-                    meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
-                }));
-
-            // Schedule 1 bundle as 1 batch.
-            bridge.schedule(ScheduleBatch {
-                worker: BUNDLE_WORKER,
-                transactions: &self.schedule_batch,
-                max_working_slot: bridge.progress().current_slot + 1,
-                flags: pack_message_flags::EXECUTE
-                    | execution_flags::DROP_ON_FAILURE
-                    | execution_flags::ALL_OR_NOTHING,
-            });
-
-            // Update metrics.
-            self.metrics
-                .execute_requested
-                .increment(bundle.len() as u64);
-
-            // Drop the bundle.
-            self.bundles.pop_front().unwrap();
-        }
-
         debug_assert_eq!(bridge.progress().leader_state, LEADER_READY);
         let budget_percentage =
             std::cmp::min(bridge.progress().current_slot_progress + BLOCK_FILL_CUTOFF, 100);
@@ -679,6 +677,8 @@ impl BatchScheduler {
             if bridge.worker(worker).len() > 0 {
                 continue;
             }
+
+            // TODO: Update pop_next to consider both bundles & transactions.
 
             // Our logic for selecting the next TX to schedule.
             let pop_next = || {
@@ -910,10 +910,10 @@ impl BatchScheduler {
         }
     }
 
-    fn calculate_priority(
+    fn calculate_cost_and_reward(
         runtime: &RuntimeState,
         tx: &SanitizedTransactionView<TransactionPtr>,
-    ) -> Option<(u64, u32)> {
+    ) -> Option<(u64, u64)> {
         // Construct runtime transaction.
         let tx = RuntimeTransaction::<&SanitizedTransactionView<TransactionPtr>>::try_new(
             tx,
@@ -948,14 +948,21 @@ impl BatchScheduler {
         let base_fee = fee_details.transaction_fee() - burn;
         let reward = base_fee.saturating_add(fee_details.prioritization_fee());
 
-        // Compute priority.
-        Some((
-            reward
-                .saturating_mul(1_000_000)
-                .saturating_div(cost.saturating_add(1)),
-            // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
-            cost.try_into().unwrap(),
-        ))
+        Some((cost, reward))
+    }
+
+    fn calculate_priority(
+        runtime: &RuntimeState,
+        tx: &SanitizedTransactionView<TransactionPtr>,
+    ) -> Option<(u64, u32)> {
+        let (cost, reward) = Self::calculate_cost_and_reward(runtime, tx)?;
+        let priority = reward
+            .saturating_mul(PRIORITY_MULTIPLIER)
+            .saturating_div(cost.saturating_add(1));
+
+        // TODO: Is it possible to craft a TX that passes sanitization with a cost >
+        // u32::MAX?
+        Some((priority, cost.try_into().unwrap()))
     }
 
     fn emit_tx_event<B>(
@@ -981,6 +988,28 @@ impl BatchScheduler {
         tx.write_locks()
             .chain(tx.read_locks())
             .any(|lock| lock == &TIP_PAYMENT_PROGRAM)
+    }
+
+    fn extract_tip(tx: &SanitizedTransactionView<TransactionPtr>) -> u64 {
+        let account_keys = tx.static_account_keys();
+
+        tx.program_instructions_iter()
+            .filter_map(|(program_id, ix)| {
+                // Check for system program transfer (discriminator = 2).
+                if program_id != &solana_sdk_ids::system_program::ID
+                    || ix.data.len() < 12
+                    || u32::from_le_bytes(*arrayref::array_ref![ix.data, 0, 4]) != 2
+                {
+                    return None;
+                }
+
+                let dest_idx = *ix.accounts.get(1)? as usize;
+                let dest = account_keys.get(dest_idx)?;
+                let amount = u64::from_le_bytes(*arrayref::array_ref![ix.data, 4, 8]);
+
+                TIP_ACCOUNTS.contains(dest).then_some(amount)
+            })
+            .sum()
     }
 }
 
@@ -1010,6 +1039,7 @@ struct BatchMetrics {
     recv_bundle_err: Counter,
     recv_bundle_filtered: Counter,
     recv_bundle_expired: Counter,
+    recv_bundle_evict: Counter,
 
     check_requested: Counter,
     check_ok: Counter,
@@ -1048,6 +1078,7 @@ impl BatchMetrics {
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
             recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
             recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
+            recv_bundle_evict: counter!("recv_bundle", "label" => "evict"),
 
             in_flight_cus: gauge!("in_flight_cus"),
 
@@ -1097,4 +1128,12 @@ impl AccountLockers {
         };
         assert!(set.remove(&tx_key));
     }
+}
+
+// TODO: Consider custom Ord to prioritize fifo as priority tie breaker?
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct BundleId {
+    priority: u64,
+    received_at: Instant,
+    keys: Vec<TransactionKey>,
 }

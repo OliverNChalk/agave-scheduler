@@ -11,14 +11,16 @@ pub(crate) const TIP_PAYMENT_PROGRAM: Pubkey =
     pubkey!("T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt");
 pub(crate) const TIP_PAYMENT_CONFIG: Pubkey =
     pubkey!("HgzT81VF1xZ3FT9Eq1pHhea7Wcfq2bv4tWTP3VvJ8Y9D");
-const TIP_PAYMENT_ACCOUNT_0: Pubkey = pubkey!("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5");
-const TIP_PAYMENT_ACCOUNT_1: Pubkey = pubkey!("HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe");
-const TIP_PAYMENT_ACCOUNT_2: Pubkey = pubkey!("Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY");
-const TIP_PAYMENT_ACCOUNT_3: Pubkey = pubkey!("ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49");
-const TIP_PAYMENT_ACCOUNT_4: Pubkey = pubkey!("DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh");
-const TIP_PAYMENT_ACCOUNT_5: Pubkey = pubkey!("ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt");
-const TIP_PAYMENT_ACCOUNT_6: Pubkey = pubkey!("DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL");
-const TIP_PAYMENT_ACCOUNT_7: Pubkey = pubkey!("3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT");
+pub(crate) const TIP_ACCOUNTS: [Pubkey; 8] = [
+    pubkey!("96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5"),
+    pubkey!("HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe"),
+    pubkey!("Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY"),
+    pubkey!("ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49"),
+    pubkey!("DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh"),
+    pubkey!("ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt"),
+    pubkey!("DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL"),
+    pubkey!("3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"),
+];
 
 const TIP_DISTRIBUTION_PROGRAM: Pubkey = pubkey!("4R3gSG8BpU4t19KYj8CfnbtRpnT8gtk4dvTHxVRwc2r7");
 const TIP_DISTRIBUTION_CONFIG: Pubkey = pubkey!("8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt");
@@ -100,14 +102,14 @@ pub(crate) fn change_tip_receiver(
             AccountMeta::new(old_tip_receiver, false),
             AccountMeta::new(new_tip_receiver, false),
             AccountMeta::new(old_block_builder, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_0, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_1, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_2, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_3, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_4, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_5, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_6, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_7, false),
+            AccountMeta::new(TIP_ACCOUNTS[0], false),
+            AccountMeta::new(TIP_ACCOUNTS[1], false),
+            AccountMeta::new(TIP_ACCOUNTS[2], false),
+            AccountMeta::new(TIP_ACCOUNTS[3], false),
+            AccountMeta::new(TIP_ACCOUNTS[4], false),
+            AccountMeta::new(TIP_ACCOUNTS[5], false),
+            AccountMeta::new(TIP_ACCOUNTS[6], false),
+            AccountMeta::new(TIP_ACCOUNTS[7], false),
             AccountMeta::new(keypair.pubkey(), true),
         ],
     };
@@ -124,14 +126,14 @@ pub(crate) fn change_tip_receiver(
             AccountMeta::new(new_tip_receiver, false),
             AccountMeta::new(old_block_builder, false),
             AccountMeta::new(new_block_builder, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_0, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_1, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_2, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_3, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_4, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_5, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_6, false),
-            AccountMeta::new(TIP_PAYMENT_ACCOUNT_7, false),
+            AccountMeta::new(TIP_ACCOUNTS[0], false),
+            AccountMeta::new(TIP_ACCOUNTS[1], false),
+            AccountMeta::new(TIP_ACCOUNTS[2], false),
+            AccountMeta::new(TIP_ACCOUNTS[3], false),
+            AccountMeta::new(TIP_ACCOUNTS[4], false),
+            AccountMeta::new(TIP_ACCOUNTS[5], false),
+            AccountMeta::new(TIP_ACCOUNTS[6], false),
+            AccountMeta::new(TIP_ACCOUNTS[7], false),
             AccountMeta::new(keypair.pubkey(), true),
         ],
     };
