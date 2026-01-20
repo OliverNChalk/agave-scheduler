@@ -54,9 +54,6 @@ const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
 const BUNDLE_CAPACITY: usize = 1024;
 
-/// We use single TX batches to optimize concurrency (our latency is very low so
-/// we want non conflicting TXs to land on different workers).
-const TARGET_BATCH_SIZE: usize = 1;
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
 const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE;
@@ -65,7 +62,7 @@ const_assert!(TX_BATCH_SIZE < 4096);
 const CHECK_WORKER: usize = 0;
 const BUNDLE_WORKER: usize = 1;
 const TPU_WORKER_START: usize = 2;
-const MAX_CHECK_BATCHES: usize = 8;
+const MAX_CHECK_BATCHES: usize = 4;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
 const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -633,7 +630,7 @@ impl BatchScheduler {
             // Build the next batch.
             self.schedule_batch.clear();
             self.schedule_batch
-                .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
+                .extend(std::iter::from_fn(pop_next).take(64));
 
             // If we built an empty batch we are done.
             if self.schedule_batch.is_empty() {
@@ -722,7 +719,7 @@ impl BatchScheduler {
             // Clear any old data & build the batch.
             self.schedule_batch.clear();
             self.schedule_batch
-                .extend(std::iter::from_fn(pop_next).take(TARGET_BATCH_SIZE));
+                .extend(std::iter::from_fn(pop_next).take(1));
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {
