@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::sync::Arc;
@@ -60,8 +61,7 @@ const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE
 const_assert!(TX_BATCH_SIZE < 4096);
 
 const CHECK_WORKER: usize = 0;
-const BUNDLE_WORKER: usize = 1;
-const TPU_WORKER_START: usize = 2;
+const EXECUTE_WORKER_START: usize = 1;
 const MAX_CHECK_BATCHES: usize = 4;
 /// How many percentage points before the end should we aim to fill the block.
 const BLOCK_FILL_CUTOFF: u8 = 20;
@@ -311,7 +311,7 @@ impl BatchScheduler {
 
         // TODO: Schedule as a single batch once we have SIMD83 live.
         bridge.schedule(ScheduleBatch {
-            worker: BUNDLE_WORKER,
+            worker: EXECUTE_WORKER_START,
             transactions: &[KeyedTransactionMeta {
                 key: init_tip_distribution,
                 meta: PriorityId { priority: u64::MAX, cost: 0, key: init_tip_distribution },
@@ -320,7 +320,7 @@ impl BatchScheduler {
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
         });
         bridge.schedule(ScheduleBatch {
-            worker: BUNDLE_WORKER,
+            worker: EXECUTE_WORKER_START,
             transactions: &[KeyedTransactionMeta {
                 key: change_tip_receiver,
                 meta: PriorityId { priority: u64::MAX, cost: 0, key: change_tip_receiver },
@@ -668,8 +668,9 @@ impl BatchScheduler {
             .saturating_sub(bridge.progress().remaining_cost_units)
             + u64::from(self.in_flight_cus);
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
-        for worker in TPU_WORKER_START..bridge.worker_count() {
-            if budget_remaining == 0 || self.checked_tx.is_empty() {
+        for worker in EXECUTE_WORKER_START..bridge.worker_count() {
+            // If we are packing too fast, slow down.
+            if budget_remaining == 0 {
                 break;
             }
 
@@ -678,48 +679,30 @@ impl BatchScheduler {
                 continue;
             }
 
-            // TODO: Update pop_next to consider both bundles & transactions.
+            // Find the best tx & bundle, if both are empty we're done.
+            let tx = self.checked_tx.last().map(|tx| tx.priority);
+            let bundle = self.bundles.last().map(|bundle| bundle.priority);
 
-            // Our logic for selecting the next TX to schedule.
-            let pop_next = || {
-                self.checked_tx
-                    .pop_last()
-                    .filter(|id| {
-                        // Check if we can fit the TX within our budget.
-                        if u64::from(id.cost) > budget_remaining {
-                            self.checked_tx.insert(*id);
+            // TODO: Need to ensure the winner doesn't exceed the budget.
+            //
+            // // Check if we can fit the TX within our budget.
+            // if u64::from(id.cost) > budget_remaining {
+            //     self.checked_tx.insert(*id);
 
-                            return false;
-                        }
+            //     return false;
+            // }
 
-                        // Check if this transaction's read/write locks conflict with any
-                        // pre-existing read/write locks.
-                        if !Self::can_lock(&self.in_flight_locks, bridge, id.key) {
-                            self.checked_tx.insert(*id);
-                            budget_remaining = 0;
-
-                            return false;
-                        }
-
-                        // Insert all the locks.
-                        Self::lock(&mut self.in_flight_locks, bridge, id.key);
-
-                        // Update the budget as we are scheduling this TX.
-                        budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
-                        self.in_flight_cus += id.cost;
-
-                        // Track that this transaction is now executing.
-                        self.executing_tx.insert(id.key);
-
-                        true
-                    })
-                    .map(|id| KeyedTransactionMeta { key: id.key, meta: id })
-            };
-
-            // Clear any old data & build the batch.
+            // Pick & schedule the best.
             self.schedule_batch.clear();
-            self.schedule_batch
-                .extend(std::iter::from_fn(pop_next).take(1));
+            match (tx, bundle) {
+                (Some(tx), Some(bundle)) => match tx.cmp(&bundle) {
+                    Ordering::Greater | Ordering::Equal => todo!("Schedule tx"),
+                    Ordering::Less => self.try_schedule_bundle(bridge, worker),
+                },
+                (Some(_), None) => todo!("tx"),
+                (None, Some(_)) => self.try_schedule_bundle(bridge, worker),
+                (None, None) => break,
+            };
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {
@@ -735,14 +718,6 @@ impl BatchScheduler {
             self.metrics
                 .execute_requested
                 .increment(self.schedule_batch.len() as u64);
-
-            // Write the next batch for the worker.
-            bridge.schedule(ScheduleBatch {
-                worker,
-                transactions: &self.schedule_batch,
-                max_working_slot: bridge.progress().current_slot + 1,
-                flags: pack_message_flags::EXECUTE,
-            });
         }
     }
 
@@ -853,6 +828,86 @@ impl BatchScheduler {
         metric.increment(1);
 
         TxDecision::Drop
+    }
+
+    /// Trys to schedule a transaction.
+    ///
+    /// # Return
+    ///
+    /// Places scheduled transactions in `self.schedule_batch`.
+    fn try_schedule_transaction<B>(&mut self, bridge: &mut B, worker: usize)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let tx = self.checked_tx.last().unwrap();
+
+        // Check if this transaction's read/write locks conflict with any
+        // pre-existing read/write locks.
+        if !Self::can_lock(&self.in_flight_locks, bridge, tx.key) {
+            return;
+        }
+
+        // Insert all the locks.
+        Self::lock(&mut self.in_flight_locks, bridge, tx.key);
+
+        // Build the 1TX batch.
+        self.schedule_batch
+            .push(KeyedTransactionMeta { key: tx.key, meta: *tx });
+
+        // Schedule the batch.
+        bridge.schedule(ScheduleBatch {
+            worker,
+            transactions: &self.schedule_batch,
+            max_working_slot: bridge.progress().current_slot + 1,
+            flags: pack_message_flags::EXECUTE,
+        });
+    }
+
+    /// Trys to schedule a bundle.
+    ///
+    /// # Return
+    ///
+    /// Places scheduled transactions in `self.schedule_batch`.
+    fn try_schedule_bundle<B>(&mut self, bridge: &mut B, worker: usize)
+    where
+        B: Bridge<Meta = PriorityId>,
+    {
+        let bundle = self.bundles.last().unwrap();
+
+        // See if the bundle can be scheduled without conflicts.
+        if !bundle
+            .keys
+            .iter()
+            .all(|tx_key| Self::can_lock(&self.in_flight_locks, bridge, *tx_key))
+        {
+            return;
+        }
+
+        // Take all the locks & declare the TXs as executing.
+        for tx_key in &bundle.keys {
+            Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
+            assert!(self.executing_tx.insert(*tx_key));
+        }
+
+        // Build the 1 bundle batch.
+        self.schedule_batch
+            .extend(bundle.keys.iter().map(|key| KeyedTransactionMeta {
+                key: *key,
+                meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
+            }));
+
+        // Schedule 1 bundle as 1 batch.
+        bridge.schedule(ScheduleBatch {
+            worker,
+            transactions: &self.schedule_batch,
+            max_working_slot: bridge.progress().current_slot + 1,
+            flags: pack_message_flags::EXECUTE
+                | execution_flags::DROP_ON_FAILURE
+                | execution_flags::ALL_OR_NOTHING,
+        });
+
+        // Drop the bundle.
+        self.bundles.pop_last().unwrap();
     }
 
     /// Checks a TX for lock conflicts without inserting locks.
