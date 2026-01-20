@@ -46,11 +46,14 @@ use crate::events::{
     CheckFailure, Event, EventEmitter, EvictReason, SlotStatsEvent, TransactionAction,
     TransactionEvent, TransactionSource,
 };
-use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
+use crate::shared::PriorityId;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
 
+/// We use single TX batches to optimize concurrency (our latency is very low so
+/// we want non conflicting TXs to land on different workers).
+const TARGET_BATCH_SIZE: usize = 1;
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
 const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE;

@@ -26,11 +26,12 @@ use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
 
 use crate::events::{Event, EventEmitter, SlotStatsEvent};
-use crate::shared::{PriorityId, TARGET_BATCH_SIZE};
+use crate::shared::PriorityId;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
 
+const TARGET_BATCH_SIZE: usize = 16;
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
 const TX_BATCH_SIZE: usize = TX_BATCH_PER_MESSAGE * MAX_TRANSACTIONS_PER_MESSAGE;
