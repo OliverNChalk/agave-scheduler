@@ -614,7 +614,7 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         // TEMP: Schedule all bundles.
-        for _ in 0..bridge.worker(1).rem() {
+        for _ in 0..bridge.worker(BUNDLE_WORKER).rem() {
             let Some((_, bundle)) = self.bundles.front() else {
                 break;
             };
