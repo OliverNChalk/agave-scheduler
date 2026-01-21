@@ -866,6 +866,7 @@ impl BatchScheduler {
         });
 
         // Update state.
+        *budget -= tx.cost;
         self.in_flight_cus += tx.cost;
         self.checked_tx.pop_last().unwrap();
     }
@@ -919,6 +920,7 @@ impl BatchScheduler {
         });
 
         // Update state.
+        *budget -= bundle.cost;
         self.in_flight_cus += bundle.cost;
         self.bundles.pop_last().unwrap();
     }
