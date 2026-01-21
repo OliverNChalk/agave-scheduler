@@ -704,8 +704,11 @@ impl BatchScheduler {
                 break;
             }
 
-            // Emit ExecuteReq events.
+            // For each TX we need to:
+            // - Add to executing_tx.
+            // - Emit an event.
             for tx in &self.schedule_batch {
+                self.executing_tx.insert(tx.key);
                 self.emit_tx_event(bridge, tx.key, tx.meta.priority, TransactionAction::ExecuteReq);
             }
 
@@ -861,6 +864,10 @@ impl BatchScheduler {
             max_working_slot: bridge.progress().current_slot + 1,
             flags: pack_message_flags::EXECUTE,
         });
+
+        // Update state.
+        self.in_flight_cus += tx.cost;
+        self.checked_tx.pop_last().unwrap();
     }
 
     /// Trys to schedule a bundle.
@@ -911,7 +918,8 @@ impl BatchScheduler {
                 | execution_flags::ALL_OR_NOTHING,
         });
 
-        // Drop the bundle.
+        // Update state.
+        self.in_flight_cus += bundle.cost;
         self.bundles.pop_last().unwrap();
     }
 
