@@ -904,10 +904,23 @@ impl BatchScheduler {
 
         // Build the 1 bundle batch.
         self.schedule_batch
-            .extend(bundle.keys.iter().map(|key| KeyedTransactionMeta {
-                key: *key,
-                meta: PriorityId { priority: u64::MAX, cost: bundle.cost, key: *key },
-            }));
+            .extend(
+                bundle
+                    .keys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, key)| KeyedTransactionMeta {
+                        key: *key,
+                        meta: PriorityId {
+                            priority: u64::MAX,
+                            cost: match i {
+                                0 => bundle.cost,
+                                1.. => 0,
+                            },
+                            key: *key,
+                        },
+                    }),
+            );
 
         // Schedule 1 bundle as 1 batch.
         bridge.schedule(ScheduleBatch {
