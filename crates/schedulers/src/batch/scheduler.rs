@@ -905,7 +905,7 @@ impl BatchScheduler {
         self.schedule_batch
             .extend(bundle.keys.iter().map(|key| KeyedTransactionMeta {
                 key: *key,
-                meta: PriorityId { priority: u64::MAX, cost: 0, key: *key },
+                meta: PriorityId { priority: u64::MAX, cost: bundle.cost, key: *key },
             }));
 
         // Schedule 1 bundle as 1 batch.
