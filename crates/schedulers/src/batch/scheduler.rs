@@ -340,6 +340,12 @@ impl BatchScheduler {
                         if self.executing_tx.remove(&meta.key) {
                             Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
                             self.in_flight_cus -= meta.cost;
+
+                            // TODO: What is the most appropriate event for a bundle unprocessed.
+                            if meta.priority == u64::MAX {
+                                return TxDecision::Drop;
+                            }
+
                             self.emit_tx_event(
                                 bridge,
                                 meta.key,
@@ -912,6 +918,7 @@ impl BatchScheduler {
                     .map(|(i, key)| KeyedTransactionMeta {
                         key: *key,
                         meta: PriorityId {
+                            // TODO: This is a hacky way to identify bundles.
                             priority: u64::MAX,
                             cost: match i {
                                 0 => bundle.cost,
