@@ -4,7 +4,7 @@ use agave_bridge::TransactionKey;
 #[repr(C)]
 pub struct PriorityId {
     pub(crate) priority: u64,
-    pub(crate) cost: u32,
+    pub(crate) cost: u64,
     pub(crate) key: TransactionKey,
 }
 

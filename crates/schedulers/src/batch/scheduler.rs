@@ -89,7 +89,7 @@ pub struct BatchScheduler {
     checked_tx: BTreeSet<PriorityId>,
     executing_tx: HashSet<TransactionKey>,
     next_recheck: Option<PriorityId>,
-    in_flight_cus: u32,
+    in_flight_cus: u64,
     in_flight_locks: HashMap<Pubkey, AccountLockers>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
     last_progress_time: Instant,
@@ -201,9 +201,7 @@ impl BatchScheduler {
         self.metrics
             .executing_len
             .set(self.executing_tx.len() as f64);
-        self.metrics
-            .in_flight_cus
-            .set(f64::from(self.in_flight_cus));
+        self.metrics.in_flight_cus.set(self.in_flight_cus as f64);
     }
 
     fn check_slot_roll<B>(&mut self, bridge: &mut B)
@@ -565,8 +563,12 @@ impl BatchScheduler {
         self.metrics.recv_bundle_ok.increment(1);
         // TODO: If Jito sends us a transaction (not a bundle) with overlapping
         // read/write keys we will panic as normally CHECK prevents this.
-        self.bundles
-            .insert(BundleId { priority, received_at: Instant::now(), keys });
+        self.bundles.insert(BundleId {
+            priority,
+            cost: total_cost,
+            received_at: Instant::now(),
+            keys,
+        });
     }
 
     fn drop_expired_bundles<B>(&mut self, bridge: &mut B)
@@ -666,11 +668,11 @@ impl BatchScheduler {
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
             .saturating_sub(bridge.progress().remaining_cost_units)
-            + u64::from(self.in_flight_cus);
-        let mut budget_remaining = budget_limit.saturating_sub(cost_used);
+            + self.in_flight_cus;
+        let mut budget = budget_limit.saturating_sub(cost_used);
         for worker in EXECUTE_WORKER_START..bridge.worker_count() {
             // If we are packing too fast, slow down.
-            if budget_remaining == 0 {
+            if budget == 0 {
                 break;
             }
 
@@ -683,26 +685,19 @@ impl BatchScheduler {
             let tx = self.checked_tx.last().map(|tx| tx.priority);
             let bundle = self.bundles.last().map(|bundle| bundle.priority);
 
-            // TODO: Need to ensure the winner doesn't exceed the budget.
-            //
-            // // Check if we can fit the TX within our budget.
-            // if u64::from(id.cost) > budget_remaining {
-            //     self.checked_tx.insert(*id);
-
-            //     return false;
-            // }
-
             // Pick & schedule the best.
             self.schedule_batch.clear();
             match (tx, bundle) {
                 (Some(tx), Some(bundle)) => match tx.cmp(&bundle) {
-                    Ordering::Greater | Ordering::Equal => todo!("Schedule tx"),
-                    Ordering::Less => self.try_schedule_bundle(bridge, worker),
+                    Ordering::Greater | Ordering::Equal => {
+                        self.try_schedule_transaction(&mut budget, bridge, worker);
+                    }
+                    Ordering::Less => self.try_schedule_bundle(&mut budget, bridge, worker),
                 },
-                (Some(_), None) => todo!("tx"),
-                (None, Some(_)) => self.try_schedule_bundle(bridge, worker),
+                (Some(_), None) => self.try_schedule_transaction(&mut budget, bridge, worker),
+                (None, Some(_)) => self.try_schedule_bundle(&mut budget, bridge, worker),
                 (None, None) => break,
-            };
+            }
 
             // If we failed to schedule anything, don't send the batch.
             if self.schedule_batch.is_empty() {
@@ -835,11 +830,16 @@ impl BatchScheduler {
     /// # Return
     ///
     /// Places scheduled transactions in `self.schedule_batch`.
-    fn try_schedule_transaction<B>(&mut self, bridge: &mut B, worker: usize)
+    fn try_schedule_transaction<B>(&mut self, budget: &mut u64, bridge: &mut B, worker: usize)
     where
         B: Bridge<Meta = PriorityId>,
     {
         let tx = self.checked_tx.last().unwrap();
+
+        // Check if this fits in the budget.
+        if tx.cost > *budget {
+            return;
+        }
 
         // Check if this transaction's read/write locks conflict with any
         // pre-existing read/write locks.
@@ -868,11 +868,16 @@ impl BatchScheduler {
     /// # Return
     ///
     /// Places scheduled transactions in `self.schedule_batch`.
-    fn try_schedule_bundle<B>(&mut self, bridge: &mut B, worker: usize)
+    fn try_schedule_bundle<B>(&mut self, budget: &mut u64, bridge: &mut B, worker: usize)
     where
         B: Bridge<Meta = PriorityId>,
     {
         let bundle = self.bundles.last().unwrap();
+
+        // Check this fits in budget.
+        if bundle.cost > *budget {
+            return;
+        }
 
         // See if the bundle can be scheduled without conflicts.
         if !bundle
@@ -1009,7 +1014,7 @@ impl BatchScheduler {
     fn calculate_priority(
         runtime: &RuntimeState,
         tx: &SanitizedTransactionView<TransactionPtr>,
-    ) -> Option<(u64, u32)> {
+    ) -> Option<(u64, u64)> {
         let (cost, reward) = Self::calculate_cost_and_reward(runtime, tx)?;
         let priority = reward
             .saturating_mul(PRIORITY_MULTIPLIER)
@@ -1017,7 +1022,7 @@ impl BatchScheduler {
 
         // TODO: Is it possible to craft a TX that passes sanitization with a cost >
         // u32::MAX?
-        Some((priority, cost.try_into().unwrap()))
+        Some((priority, cost))
     }
 
     fn emit_tx_event<B>(
@@ -1189,6 +1194,7 @@ impl AccountLockers {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct BundleId {
     priority: u64,
+    cost: u64,
     received_at: Instant,
     keys: Vec<TransactionKey>,
 }

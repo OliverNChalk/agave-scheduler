@@ -44,7 +44,7 @@ const BLOCK_FILL_CUTOFF: u8 = 20;
 pub struct GreedyScheduler {
     unchecked: MinMaxHeap<PriorityId>,
     checked: MinMaxHeap<PriorityId>,
-    cu_in_flight: u32,
+    cu_in_flight: u64,
     schedule_locks: HashMap<Pubkey, bool>,
     schedule_batch: Vec<KeyedTransactionMeta<PriorityId>>,
 
@@ -110,7 +110,7 @@ impl GreedyScheduler {
             .set(bridge.progress().next_leader_slot as f64);
         self.metrics.unchecked_len.set(self.unchecked.len() as f64);
         self.metrics.checked_len.set(self.checked.len() as f64);
-        self.metrics.cu_in_flight.set(f64::from(self.cu_in_flight));
+        self.metrics.cu_in_flight.set(self.cu_in_flight as f64);
     }
 
     fn check_slot_roll<B>(&mut self, bridge: &B)
@@ -249,7 +249,7 @@ impl GreedyScheduler {
         let budget_limit = MAX_BLOCK_UNITS_SIMD_0256 * u64::from(budget_percentage) / 100;
         let cost_used = MAX_BLOCK_UNITS_SIMD_0256
             .saturating_sub(bridge.progress().remaining_cost_units)
-            + u64::from(self.cu_in_flight);
+            + self.cu_in_flight;
         let mut budget_remaining = budget_limit.saturating_sub(cost_used);
         for worker in 1..bridge.worker_count() {
             if budget_remaining == 0 || self.checked.is_empty() {
@@ -266,7 +266,7 @@ impl GreedyScheduler {
                     .pop_max()
                     .filter(|id| {
                         // Check if we can fit the TX within our budget.
-                        if u64::from(id.cost) > budget_remaining {
+                        if id.cost > budget_remaining {
                             self.checked.push(*id);
 
                             return false;
@@ -291,7 +291,7 @@ impl GreedyScheduler {
                         }
 
                         // Update the budget as we are scheduling this TX.
-                        budget_remaining = budget_remaining.saturating_sub(u64::from(id.cost));
+                        budget_remaining = budget_remaining.saturating_sub(id.cost);
                         self.cu_in_flight += id.cost;
 
                         true
@@ -396,7 +396,7 @@ impl GreedyScheduler {
     fn calculate_priority(
         runtime: &RuntimeState,
         tx: &SanitizedTransactionView<TransactionPtr>,
-    ) -> Option<(u64, u32)> {
+    ) -> Option<(u64, u64)> {
         // Construct runtime transaction.
         let tx = RuntimeTransaction::<&SanitizedTransactionView<TransactionPtr>>::try_new(
             tx,
@@ -436,8 +436,7 @@ impl GreedyScheduler {
             reward
                 .saturating_mul(1_000_000)
                 .saturating_div(cost.saturating_add(1)),
-            // TODO: Is it possible to craft a TX that passes sanitization with a cost > u32::MAX?
-            cost.try_into().unwrap(),
+            cost,
         ))
     }
 }
