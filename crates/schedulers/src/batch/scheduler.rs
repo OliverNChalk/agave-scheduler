@@ -714,7 +714,7 @@ impl BatchScheduler {
             // - Add to executing_tx.
             // - Emit an event.
             for tx in &self.schedule_batch {
-                self.executing_tx.insert(tx.key);
+                assert!(self.executing_tx.insert(tx.key));
                 self.emit_tx_event(bridge, tx.key, tx.meta.priority, TransactionAction::ExecuteReq);
             }
 
@@ -905,7 +905,6 @@ impl BatchScheduler {
         // Take all the locks & declare the TXs as executing.
         for tx_key in &bundle.keys {
             Self::lock(&mut self.in_flight_locks, bridge, *tx_key);
-            assert!(self.executing_tx.insert(*tx_key));
         }
 
         // Build the 1 bundle batch.
