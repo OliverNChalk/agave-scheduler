@@ -366,6 +366,7 @@ where
                 self.worker_response.insert(WorkerResponsePointers {
                     index: 0,
                     len: usize::from(rep.batch.num_transactions),
+                    batch_offset: rep.batch.transactions_offset,
                     metas,
                     responses,
                 })
@@ -436,10 +437,10 @@ where
                 let ptrs = self.worker_response.take().unwrap();
 
                 // SAFETY:
-                // - It is our responsibility to free the response pointers. The transactin
+                // - It is our responsibility to free the response pointers. The transaction
                 //   lifetimes we are already managing separately via Keep/Drop.
                 unsafe {
-                    self.allocator.free(ptrs.metas.cast());
+                    self.allocator.free_offset(ptrs.batch_offset);
                     match ptrs.responses {
                         WorkerResponseBatch::Unprocessed => {}
                         WorkerResponseBatch::Check(ptr) => self.allocator.free(ptr.cast()),
@@ -502,6 +503,7 @@ impl Worker for SchedulerWorker {
 struct WorkerResponsePointers<M> {
     index: usize,
     len: usize,
+    batch_offset: usize,
     metas: NonNull<KeyedTransactionMeta<M>>,
     responses: WorkerResponseBatch,
 }
