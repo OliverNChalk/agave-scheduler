@@ -1048,9 +1048,9 @@ impl BatchScheduler {
         let priority = reward
             .saturating_mul(PRIORITY_MULTIPLIER)
             .saturating_div(cost.saturating_add(1));
+        // NB: We use `u64::MAX` as sentinel value for bundles.
+        let priority = core::cmp::min(priority, u64::MAX - 1);
 
-        // TODO: Is it possible to craft a TX that passes sanitization with a cost >
-        // u32::MAX?
         Some((priority, cost))
     }
 
