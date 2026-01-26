@@ -416,6 +416,13 @@ where
                     WorkerResponse { key, meta, response: WorkerAction::Check(rep, keys.as_ref()) },
                 );
 
+                // Free old keys if present before storing new keys.
+                if let Some(old_keys) = self.state[key].keys.take() {
+                    // SAFETY
+                    // - We own this allocation exclusively.
+                    unsafe { old_keys.free(&self.allocator) }
+                }
+
                 // Store the keys on state.
                 self.state[key].keys = keys;
 
