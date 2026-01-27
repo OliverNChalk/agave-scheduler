@@ -847,26 +847,35 @@ impl BatchScheduler {
         self.emit_tx_event(bridge, meta.key, meta.priority, action);
         metric.increment(1);
 
-        // Handle retryable errors (non-bundles only).
-        if meta.priority == BUNDLE_MARKER && Self::is_retryable(rep.not_included_reason) {
-            self.deferred_tx.push(meta);
-
-            // Evict from checked_tx if over capacity.
-            if self.pending_len() >= CHECKED_CAPACITY {
-                let evicted = self.checked_tx.pop_first().unwrap();
-                self.emit_tx_event(
-                    bridge,
-                    evicted.key,
-                    evicted.priority,
-                    TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
-                );
-                bridge.tx_drop(evicted.key);
-            }
-
-            return TxDecision::Keep;
+        // If non retryable or a bundle, just drop immediately.
+        if matches!(
+            (meta.priority == BUNDLE_MARKER, Self::is_retryable(rep.not_included_reason)),
+            (true, _) | (_, false)
+        ) {
+            return TxDecision::Drop;
         }
 
-        TxDecision::Drop
+        // If we attempted on this slot already, defer to next slot.
+        match rep.execution_slot == self.slot {
+            true => self.deferred_tx.push(meta),
+            false => {
+                self.checked_tx.insert(meta);
+            }
+        }
+
+        // Evict from checked_tx if over capacity.
+        if self.pending_len() > CHECKED_CAPACITY {
+            let evicted = self.checked_tx.pop_first().unwrap();
+            self.emit_tx_event(
+                bridge,
+                evicted.key,
+                evicted.priority,
+                TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
+            );
+            bridge.tx_drop(evicted.key);
+        }
+
+        TxDecision::Keep
     }
 
     fn pending_len(&self) -> usize {
