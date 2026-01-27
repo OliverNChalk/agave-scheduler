@@ -96,9 +96,11 @@ where
         let transactions_offset = unsafe { allocator.offset(transactions) };
 
         // Get our two pointers to the TX region & meta region.
-        let tx_ptr = allocator
-            .ptr_from_offset(transactions_offset)
-            .cast::<SharableTransactionRegion>();
+        let tx_ptr = unsafe {
+            allocator
+                .ptr_from_offset(transactions_offset)
+                .cast::<SharableTransactionRegion>()
+        };
         // SAFETY
         // - Pointer is guaranteed to not overrun the allocation as we just created it
         //   with a sufficient size.
@@ -326,10 +328,11 @@ where
                 self.workers[worker].0.worker_to_pack.finalize();
 
                 // Get transaction & meta pointers.
-                let transactions = self
-                    .allocator
-                    .ptr_from_offset(rep.batch.transactions_offset)
-                    .cast::<SharableTransactionRegion>();
+                let transactions = unsafe {
+                    self.allocator
+                        .ptr_from_offset(rep.batch.transactions_offset)
+                        .cast::<SharableTransactionRegion>()
+                };
                 // SAFETY:
                 // - We ensured that this batch was originally allocated to support M.
                 let metas = unsafe { transactions.byte_add(Self::TX_BATCH_META_OFFSET).cast() };
@@ -340,22 +343,22 @@ where
                             rep.batch.num_transactions,
                             rep.responses.num_transaction_responses
                         );
-                        WorkerResponseBatch::Execution(
+                        WorkerResponseBatch::Execution(unsafe {
                             self.allocator
                                 .ptr_from_offset(rep.responses.transaction_responses_offset)
-                                .cast(),
-                        )
+                                .cast()
+                        })
                     }
                     (processed_codes::PROCESSED, worker_message_types::CHECK_RESPONSE) => {
                         assert_eq!(
                             rep.batch.num_transactions,
                             rep.responses.num_transaction_responses
                         );
-                        WorkerResponseBatch::Check(
+                        WorkerResponseBatch::Check(unsafe {
                             self.allocator
                                 .ptr_from_offset(rep.responses.transaction_responses_offset)
-                                .cast(),
-                        )
+                                .cast()
+                        })
                     }
                     (processed_codes::MAX_WORKING_SLOT_EXCEEDED, _) => {
                         WorkerResponseBatch::Unprocessed

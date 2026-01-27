@@ -53,11 +53,11 @@ trivially_copy_pass_by_ref = "warn"
 
 [workspace.dependencies]
 agave-bridge.path = "./crates/bridge"
-agave-feature-set = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
-agave-scheduler-bindings = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
+agave-feature-set = { git = "https://github.com/OliverNChalk/agave" }
+agave-scheduler-bindings = { git = "https://github.com/OliverNChalk/agave" }
 agave-schedulers.path = "./crates/schedulers"
-agave-scheduling-utils = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
-agave-transaction-view = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
+agave-scheduling-utils = { git = "https://github.com/OliverNChalk/agave" }
+agave-transaction-view = { git = "https://github.com/OliverNChalk/agave" }
 arrayref = "0.3.9"
 bincode = "1.3.3"
 borsh = "1.6.0"
@@ -83,10 +83,10 @@ serde_yaml = "0.9.34"
 shaq = "1.0.0"
 slotmap = "1.0.7"
 solana-clock = "3.0.0"
-solana-compute-budget-instruction = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
+solana-compute-budget-instruction = { git = "https://github.com/OliverNChalk/agave" }
 solana-compute-budget-interface = "3.0.0"
-solana-cost-model = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
-solana-fee = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
+solana-cost-model = { git = "https://github.com/OliverNChalk/agave" }
+solana-fee = { git = "https://github.com/OliverNChalk/agave" }
 solana-fee-structure = "3.0.0"
 solana-hash = "3.0.1"
 solana-keypair = "3.0.1"
@@ -96,10 +96,10 @@ solana-pubkey = "3.0.0"
 solana-pubsub-client = "3.0.0"
 solana-rpc-client = "3.0.0"
 solana-rpc-client-types = "3.0.0"
-solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
+solana-runtime-transaction = { git = "https://github.com/OliverNChalk/agave" }
 solana-sdk-ids = "3.0.0"
 solana-signature = "3.0.0"
-solana-svm-transaction = { git = "https://github.com/OliverNChalk/agave", branch = "feat/leader-state" }
+solana-svm-transaction = { git = "https://github.com/OliverNChalk/agave" }
 solana-system-transaction = "3.0.0"
 solana-transaction = "3.0.1"
 static_assertions = "1.1.0"
@@ -111,4 +111,4 @@ toolbox.git = "https://github.com/OliverNChalk/toolbox-rs"
 tracing = "0.1.41"
 
 [patch.crates-io]
-rts-alloc.git = "https://github.com/anza-xyz/rts-alloc"
+rts-alloc = { git = "https://github.com/anza-xyz/rts-alloc", rev = "175b539dbda2ca8d26d360aabf049cedfb4bf53b" }
