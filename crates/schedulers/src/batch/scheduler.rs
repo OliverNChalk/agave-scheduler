@@ -50,6 +50,7 @@ use crate::events::{
 use crate::shared::PriorityId;
 
 const PRIORITY_MULTIPLIER: u64 = 1_000_000;
+const BUNDLE_MARKER: u64 = u64::MAX;
 
 const UNCHECKED_CAPACITY: usize = 64 * 1024;
 const CHECKED_CAPACITY: usize = 64 * 1024;
@@ -88,6 +89,7 @@ pub struct BatchScheduler {
     unchecked_tx: MinMaxHeap<PriorityId>,
     checked_tx: BTreeSet<PriorityId>,
     executing_tx: HashSet<TransactionKey>,
+    deferred_tx: Vec<PriorityId>,
     next_recheck: Option<PriorityId>,
     in_flight_cus: u64,
     in_flight_locks: HashMap<Pubkey, AccountLockers>,
@@ -130,6 +132,7 @@ impl BatchScheduler {
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked_tx: BTreeSet::new(),
                 executing_tx: HashSet::new(),
+                deferred_tx: Vec::new(),
                 next_recheck: None,
                 in_flight_cus: 0,
                 in_flight_locks: HashMap::new(),
@@ -194,13 +197,16 @@ impl BatchScheduler {
         self.metrics
             .tpu_checked_len
             .set(self.checked_tx.len() as f64);
+        self.metrics
+            .executing_len
+            .set(self.executing_tx.len() as f64);
+        self.metrics
+            .tpu_deferred_len
+            .set(self.deferred_tx.len() as f64);
         self.metrics.bundles_len.set(self.bundles.len() as f64);
         self.metrics
             .locks_len
             .set(self.in_flight_locks.len() as f64);
-        self.metrics
-            .executing_len
-            .set(self.executing_tx.len() as f64);
         self.metrics.in_flight_cus.set(self.in_flight_cus as f64);
     }
 
@@ -242,6 +248,11 @@ impl BatchScheduler {
             // Update our local state.
             self.slot = progress.current_slot;
             self.slot_stats.was_leader_ready = false;
+
+            // Drain deferred transactions back to checked.
+            for meta in self.deferred_tx.drain(..) {
+                assert!(self.checked_tx.insert(meta));
+            }
 
             // Start another recheck if we are not currently performing one.
             self.next_recheck = self
@@ -312,7 +323,7 @@ impl BatchScheduler {
             worker: EXECUTE_WORKER_START,
             transactions: &[KeyedTransactionMeta {
                 key: init_tip_distribution,
-                meta: PriorityId { priority: u64::MAX, cost: 0, key: init_tip_distribution },
+                meta: PriorityId { priority: BUNDLE_MARKER, cost: 0, key: init_tip_distribution },
             }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
@@ -321,7 +332,7 @@ impl BatchScheduler {
             worker: EXECUTE_WORKER_START,
             transactions: &[KeyedTransactionMeta {
                 key: change_tip_receiver,
-                meta: PriorityId { priority: u64::MAX, cost: 0, key: change_tip_receiver },
+                meta: PriorityId { priority: BUNDLE_MARKER, cost: 0, key: change_tip_receiver },
             }],
             max_working_slot: self.slot + 4,
             flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
@@ -342,7 +353,7 @@ impl BatchScheduler {
                             self.in_flight_cus -= meta.cost;
 
                             // TODO: What is the most appropriate event for a bundle unprocessed.
-                            if meta.priority == u64::MAX {
+                            if meta.priority == BUNDLE_MARKER {
                                 return TxDecision::Drop;
                             }
 
@@ -783,7 +794,7 @@ impl BatchScheduler {
         }
 
         // First check. Evict lowest priority if at capacity.
-        if self.checked_tx.len() == CHECKED_CAPACITY {
+        if self.pending_len() >= CHECKED_CAPACITY {
             let id = self.checked_tx.pop_first().unwrap();
             self.emit_tx_event(
                 bridge,
@@ -807,7 +818,12 @@ impl BatchScheduler {
         TxDecision::Keep
     }
 
-    fn on_execute<B>(&mut self, bridge: &B, meta: PriorityId, rep: ExecutionResponse) -> TxDecision
+    fn on_execute<B>(
+        &mut self,
+        bridge: &mut B,
+        meta: PriorityId,
+        rep: ExecutionResponse,
+    ) -> TxDecision
     where
         B: Bridge<Meta = PriorityId>,
     {
@@ -831,7 +847,47 @@ impl BatchScheduler {
         self.emit_tx_event(bridge, meta.key, meta.priority, action);
         metric.increment(1);
 
+        // TODO: Could spuriously trigger if we have a conflict with vote worker?
+        //
+        // We track locks so if we see this error we have a bug.
+        assert!(rep.not_included_reason != not_included_reasons::ACCOUNT_IN_USE);
+
+        // Handle retryable errors (non-bundles only).
+        if meta.priority == BUNDLE_MARKER && Self::is_retryable(rep.not_included_reason) {
+            self.deferred_tx.push(meta);
+
+            // Evict from checked_tx if over capacity.
+            if self.pending_len() >= CHECKED_CAPACITY {
+                let evicted = self.checked_tx.pop_first().unwrap();
+                self.emit_tx_event(
+                    bridge,
+                    evicted.key,
+                    evicted.priority,
+                    TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
+                );
+                bridge.tx_drop(evicted.key);
+            }
+
+            return TxDecision::Keep;
+        }
+
         TxDecision::Drop
+    }
+
+    fn pending_len(&self) -> usize {
+        self.checked_tx.len() + self.executing_tx.len() + self.deferred_tx.len()
+    }
+
+    const fn is_retryable(reason: u8) -> bool {
+        matches!(
+            reason,
+            not_included_reasons::BANK_NOT_AVAILABLE
+                | not_included_reasons::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT
+                | not_included_reasons::WOULD_EXCEED_MAX_ACCOUNT_COST_LIMIT
+                | not_included_reasons::WOULD_EXCEED_ACCOUNT_DATA_BLOCK_LIMIT
+                | not_included_reasons::WOULD_EXCEED_MAX_VOTE_COST_LIMIT
+                | not_included_reasons::WOULD_EXCEED_ACCOUNT_DATA_TOTAL_LIMIT
+        )
     }
 
     /// Trys to schedule a transaction.
@@ -918,7 +974,7 @@ impl BatchScheduler {
                         key: *key,
                         meta: PriorityId {
                             // TODO: This is a hacky way to identify bundles.
-                            priority: u64::MAX,
+                            priority: BUNDLE_MARKER,
                             cost: match i {
                                 0 => bundle.cost,
                                 1.. => 0,
@@ -1049,7 +1105,7 @@ impl BatchScheduler {
             .saturating_mul(PRIORITY_MULTIPLIER)
             .saturating_div(cost.saturating_add(1));
         // NB: We use `u64::MAX` as sentinel value for bundles.
-        let priority = core::cmp::min(priority, u64::MAX - 1);
+        let priority = core::cmp::min(priority, BUNDLE_MARKER - 1);
 
         Some((priority, cost))
     }
@@ -1108,6 +1164,7 @@ struct BatchMetrics {
 
     tpu_unchecked_len: Gauge,
     tpu_checked_len: Gauge,
+    tpu_deferred_len: Gauge,
     bundles_len: Gauge,
     locks_len: Gauge,
     executing_len: Gauge,
@@ -1149,6 +1206,7 @@ impl BatchMetrics {
 
             tpu_unchecked_len: gauge!("container_len", "label" => "tpu_unchecked"),
             tpu_checked_len: gauge!("container_len", "label" => "tpu_checked"),
+            tpu_deferred_len: gauge!("container_len", "label" => "tpu_deferred"),
             bundles_len: gauge!("container_len", "label" => "bundles"),
             locks_len: gauge!("container_len", "label" => "locks"),
             executing_len: gauge!("container_len", "label" => "executing"),
