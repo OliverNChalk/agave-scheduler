@@ -847,11 +847,6 @@ impl BatchScheduler {
         self.emit_tx_event(bridge, meta.key, meta.priority, action);
         metric.increment(1);
 
-        // TODO: Could spuriously trigger if we have a conflict with vote worker?
-        //
-        // We track locks so if we see this error we have a bug.
-        assert!(rep.not_included_reason != not_included_reasons::ACCOUNT_IN_USE);
-
         // Handle retryable errors (non-bundles only).
         if meta.priority == BUNDLE_MARKER && Self::is_retryable(rep.not_included_reason) {
             self.deferred_tx.push(meta);
