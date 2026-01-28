@@ -867,14 +867,16 @@ impl BatchScheduler {
 
         // Evict from checked_tx if over capacity.
         if self.pending_len() > CHECKED_CAPACITY {
-            let evicted = self.checked_tx.pop_first().unwrap();
-            self.emit_tx_event(
-                bridge,
-                evicted.key,
-                evicted.priority,
-                TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
-            );
-            bridge.tx_drop(evicted.key);
+            if let Some(evicted) = self.checked_tx.pop_first() {
+                self.emit_tx_event(
+                    bridge,
+                    evicted.key,
+                    evicted.priority,
+                    TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
+                );
+                bridge.tx_drop(evicted.key);
+            }
+            self.metrics.execute_evict.increment(1);
         }
 
         TxDecision::Keep
@@ -1203,6 +1205,7 @@ struct BatchMetrics {
     execute_ok: Counter,
     execute_err: Counter,
     execute_unprocessed: Counter,
+    execute_evict: Counter,
 }
 
 impl BatchMetrics {
@@ -1245,6 +1248,7 @@ impl BatchMetrics {
             execute_ok: counter!("execute", "label" => "ok"),
             execute_err: counter!("execute", "label" => "err"),
             execute_unprocessed: counter!("execute", "label" => "unprocessed"),
+            execute_evict: counter!("execute", "label" => "evict"),
         }
     }
 }
