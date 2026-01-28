@@ -848,10 +848,9 @@ impl BatchScheduler {
         metric.increment(1);
 
         // If non retryable or a bundle, just drop immediately.
-        if matches!(
-            (meta.priority == BUNDLE_MARKER, Self::is_retryable(rep.not_included_reason)),
-            (true, _) | (_, false)
-        ) {
+        let is_bundle = meta.priority == BUNDLE_MARKER;
+        let is_retryable = Self::is_retryable(rep.not_included_reason);
+        if is_bundle || !is_retryable {
             return TxDecision::Drop;
         }
 
