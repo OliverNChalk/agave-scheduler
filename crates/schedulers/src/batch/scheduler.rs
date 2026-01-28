@@ -866,16 +866,16 @@ impl BatchScheduler {
         }
 
         // Evict from checked_tx if over capacity.
-        if self.pending_len() > CHECKED_CAPACITY {
-            if let Some(evicted) = self.checked_tx.pop_first() {
-                self.emit_tx_event(
-                    bridge,
-                    evicted.key,
-                    evicted.priority,
-                    TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
-                );
-                bridge.tx_drop(evicted.key);
-            }
+        if self.pending_len() > CHECKED_CAPACITY
+            && let Some(evicted) = self.checked_tx.pop_first()
+        {
+            self.emit_tx_event(
+                bridge,
+                evicted.key,
+                evicted.priority,
+                TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
+            );
+            bridge.tx_drop(evicted.key);
             self.metrics.execute_evict.increment(1);
         }
 
