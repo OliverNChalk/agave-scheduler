@@ -855,8 +855,11 @@ impl BatchScheduler {
             return TxDecision::Drop;
         }
 
-        // If we attempted on this slot already, defer to next slot.
-        match rep.execution_slot == self.slot {
+        // If we attempted on this slot already, defer to next slot. Unless this was a
+        // lock conflict, then we can immediately retry.
+        match rep.execution_slot == self.slot
+            && rep.not_included_reason != not_included_reasons::ACCOUNT_IN_USE
+        {
             true => self.deferred_tx.push(meta),
             false => {
                 self.checked_tx.insert(meta);
@@ -885,7 +888,8 @@ impl BatchScheduler {
     const fn is_retryable(reason: u8) -> bool {
         matches!(
             reason,
-            not_included_reasons::BANK_NOT_AVAILABLE
+            not_included_reasons::ACCOUNT_IN_USE
+                | not_included_reasons::BANK_NOT_AVAILABLE
                 | not_included_reasons::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT
                 | not_included_reasons::WOULD_EXCEED_MAX_ACCOUNT_COST_LIMIT
                 | not_included_reasons::WOULD_EXCEED_ACCOUNT_DATA_BLOCK_LIMIT
