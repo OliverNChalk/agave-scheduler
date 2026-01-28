@@ -23,7 +23,7 @@ pub(crate) const TIP_ACCOUNTS: [Pubkey; 8] = [
 ];
 
 const TIP_DISTRIBUTION_PROGRAM: Pubkey = pubkey!("4R3gSG8BpU4t19KYj8CfnbtRpnT8gtk4dvTHxVRwc2r7");
-const TIP_DISTRIBUTION_CONFIG: Pubkey = pubkey!("8F4jGUmxF36vQ6yabnsxX6AQVXdKBhs8kGSUuRKSg8Xt");
+const TIP_DISTRIBUTION_CONFIG: Pubkey = pubkey!("STGR71TeAeycQUDKzku1GqPQdErQcTcdqxJuQmCjBu6");
 
 #[derive(Debug, Clone, Copy)]
 pub struct TipDistributionArgs {
