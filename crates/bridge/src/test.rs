@@ -3,7 +3,8 @@ use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{
-    CheckResponse, fee_payer_balance_flags, resolve_flags, status_check_flags,
+    CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons, resolve_flags,
+    status_check_flags,
 };
 use agave_scheduler_bindings::{ProgressMessage, SharablePubkeys, pack_message_flags};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
@@ -115,8 +116,54 @@ where
         }
     }
 
+    pub fn queue_execute_response(
+        &mut self,
+        batch: &ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
+        index: usize,
+        response: ExecutionResponse,
+    ) {
+        let tx = batch.transactions[index];
+        let rep = (tx, WorkerActionLite::Execute(response));
+        self.worker_queues[batch.worker].push_back(rep);
+    }
+
+    pub fn queue_unprocessed_response(
+        &mut self,
+        batch: &ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
+        index: usize,
+    ) {
+        let tx = batch.transactions[index];
+        let rep = (tx, WorkerActionLite::Unprocessed);
+        self.worker_queues[batch.worker].push_back(rep);
+    }
+
+    #[must_use]
+    pub fn execute_ok(&self) -> ExecutionResponse {
+        ExecutionResponse {
+            execution_slot: self.progress.current_slot,
+            not_included_reason: not_included_reasons::NONE,
+            cost_units: 0,
+            fee_payer_balance: u64::from(u32::MAX),
+        }
+    }
+
+    #[must_use]
+    pub fn execute_err(&self, reason: u8) -> ExecutionResponse {
+        ExecutionResponse {
+            execution_slot: self.progress.current_slot,
+            not_included_reason: reason,
+            cost_units: 0,
+            fee_payer_balance: u64::from(u32::MAX),
+        }
+    }
+
     pub fn pop_schedule(&mut self) -> Option<ScheduleBatch<Vec<KeyedTransactionMeta<M>>>> {
         self.scheduled.pop_front()
+    }
+
+    #[must_use]
+    pub fn contains_tx(&self, key: TransactionKey) -> bool {
+        self.state.contains_key(key)
     }
 
     #[must_use]
@@ -177,8 +224,26 @@ where
         &self.state[key]
     }
 
-    fn tx_insert(&mut self, _: &[u8]) -> Result<TransactionKey, TransactionViewError> {
-        unimplemented!()
+    fn tx_insert(&mut self, tx: &[u8]) -> Result<TransactionKey, TransactionViewError> {
+        // Copy the transaction bytes & get a raw pointer.
+        let mut serialized = tx.to_vec();
+        let len = serialized.len();
+        let data = NonNull::new(serialized.as_mut_ptr()).unwrap();
+        core::mem::forget(serialized);
+
+        // Construct our TransactionPtr & sanitized view.
+        //
+        // SAFETY
+        // - We own this allocation exclusively & len is accurate.
+        let data = unsafe { TransactionPtr::from_raw_parts(data, len) };
+        let data = SanitizedTransactionView::try_new_sanitized(data, true)?;
+
+        // Insert into state & return the key.
+        let key = self
+            .state
+            .insert(TransactionState { dead: false, borrows: 0, data, keys: None });
+
+        Ok(key)
     }
 
     fn tx_drop(&mut self, key: TransactionKey) {
@@ -227,7 +292,9 @@ where
         // Temporarily take keys to avoid mutable aliasing self.
         let keys = self.state[key].keys.take();
         let response = match rep {
+            WorkerActionLite::Unprocessed => WorkerAction::Unprocessed,
             WorkerActionLite::Check(rep) => WorkerAction::Check(rep, keys.as_ref()),
+            WorkerActionLite::Execute(rep) => WorkerAction::Execute(rep),
         };
 
         match cb(self, WorkerResponse { key, meta, response }) {
@@ -301,5 +368,7 @@ impl Worker for TestWorker {
 
 #[derive(Debug, Clone)]
 enum WorkerActionLite {
+    Unprocessed,
     Check(CheckResponse),
+    Execute(ExecutionResponse),
 }
