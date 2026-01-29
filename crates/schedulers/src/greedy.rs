@@ -149,6 +149,7 @@ impl GreedyScheduler {
                 match response {
                     WorkerAction::Unprocessed => {
                         self.slot_event.worker_unprocessed += 1;
+                        self.checked.push(meta);
 
                         TxDecision::Keep
                     }
