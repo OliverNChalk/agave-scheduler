@@ -382,7 +382,7 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         let additional = std::cmp::min(bridge.tpu_len(), max_count);
-        let shortfall = (self.checked_tx.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
+        let shortfall = (self.unchecked_tx.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
 
         // NB: Technically we are evicting more than we need to because not all of
         // `additional` will parse correctly & thus have a priority.
