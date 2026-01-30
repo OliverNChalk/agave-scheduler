@@ -149,6 +149,7 @@ impl GreedyScheduler {
                 match response {
                     WorkerAction::Unprocessed => {
                         self.slot_event.worker_unprocessed += 1;
+                        self.checked.push(meta);
 
                         TxDecision::Keep
                     }
@@ -761,6 +762,116 @@ mod tests {
             panic!();
         };
         assert_eq!(bridge.tx(ex1.key).data.signatures()[0], tx0.signatures[0]);
+    }
+
+    #[test]
+    fn execute_ok_drops_transaction() {
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new(None);
+
+        // Notify the scheduler that node is now leader.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+
+        // Ingest a transaction.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Poll to send check request.
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+
+        // Poll to send execute request.
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::EXECUTE);
+        assert_eq!(batch.transactions.len(), 1);
+        let tx_key = batch.transactions[0].key;
+
+        // Verify transaction exists before execution response.
+        assert!(bridge.contains_tx(tx_key));
+
+        // Respond with execute_ok - transaction should be dropped.
+        let response = bridge.execute_ok();
+        bridge.queue_execute_response(&batch, 0, response);
+        scheduler.poll(&mut bridge);
+
+        // Verify transaction was removed from bridge.
+        assert!(!bridge.contains_tx(tx_key));
+    }
+
+    #[test]
+    fn execute_err_drops_transaction() {
+        use agave_scheduler_bindings::worker_message_types::not_included_reasons;
+
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new(None);
+
+        // Notify the scheduler that node is now leader.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+
+        // Ingest a transaction.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Poll to send check request.
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+
+        // Poll to send execute request.
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::EXECUTE);
+        let tx_key = batch.transactions[0].key;
+
+        // Verify transaction exists before execution response.
+        assert!(bridge.contains_tx(tx_key));
+
+        // Respond with execute_err (non-retryable error) - transaction should be
+        // dropped.
+        let response = bridge.execute_err(not_included_reasons::ALREADY_PROCESSED);
+        bridge.queue_execute_response(&batch, 0, response);
+        scheduler.poll(&mut bridge);
+
+        // Verify transaction was removed from bridge.
+        assert!(!bridge.contains_tx(tx_key));
+    }
+
+    #[test]
+    fn unprocessed_keeps_transaction_in_bridge() {
+        let mut bridge = TestBridge::new(5, 4);
+        let mut scheduler = GreedyScheduler::new(None);
+
+        // Notify the scheduler that node is now leader.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+
+        // Ingest a transaction.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Poll to send check request.
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+
+        // Poll to send execute request.
+        scheduler.poll(&mut bridge);
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::EXECUTE);
+        let original_key = batch.transactions[0].key;
+
+        // Respond with unprocessed - transaction should be kept (TxDecision::Keep).
+        bridge.queue_unprocessed_response(&batch, 0);
+        scheduler.poll(&mut bridge);
+
+        // Immediately retryable on unprocessed.
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::EXECUTE);
+        assert_eq!(batch.transactions[0].key, original_key);
+
+        // Verify the transaction is still in the bridge (not dropped).
+        assert!(bridge.contains_tx(original_key));
     }
 
     fn noop_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> VersionedTransaction {
