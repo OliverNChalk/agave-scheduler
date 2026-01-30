@@ -1152,8 +1152,14 @@ impl BatchScheduler {
     {
         let Some(events) = &self.events else { return };
 
+        // Don't emit for vote TXs (save my disk/familia).
+        let tx = bridge.tx(key);
+        if tx.is_simple_vote() {
+            return;
+        }
+
         events.emit(Event::Transaction(TransactionEvent {
-            signature: bridge.tx(key).data.signatures()[0],
+            signature: tx.data.signatures()[0],
             slot: self.slot,
             priority,
             action,
