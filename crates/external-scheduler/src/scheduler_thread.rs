@@ -7,13 +7,14 @@ use agave_schedulers::batch::BatchScheduler;
 use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::GreedyScheduler;
 use agave_schedulers::shared::PriorityId;
-use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client, logon_flags};
+use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client};
 use toolbox::shutdown::Shutdown;
 
 pub(crate) fn spawn<S>(
     shutdown: Shutdown,
     bindings_ipc: PathBuf,
     mut scheduler: S,
+    logon_flags: u16,
 ) -> JoinHandle<()>
 where
     S: Scheduler + Send,
@@ -32,7 +33,7 @@ where
                     progress_tracker_capacity: 128,
                     pack_to_worker_capacity: 128,
                     worker_to_pack_capacity: 256,
-                    flags: logon_flags::REROUTE_VOTES,
+                    flags: logon_flags,
                 },
                 Duration::from_secs(1),
             )
