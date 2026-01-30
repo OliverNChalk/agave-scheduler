@@ -22,6 +22,7 @@ use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
 use hashbrown::hash_map::EntryRef;
 use hashbrown::{HashMap, HashSet};
+use indexmap::IndexSet;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
 use solana_clock::{DEFAULT_SLOTS_PER_EPOCH, Slot};
@@ -89,7 +90,7 @@ pub struct BatchScheduler {
     unchecked_tx: MinMaxHeap<PriorityId>,
     checked_tx: BTreeSet<PriorityId>,
     executing_tx: HashSet<TransactionKey>,
-    deferred_tx: Vec<PriorityId>,
+    deferred_tx: IndexSet<PriorityId>,
     next_recheck: Option<PriorityId>,
     in_flight_cus: u64,
     in_flight_locks: HashMap<Pubkey, AccountLockers>,
@@ -131,8 +132,8 @@ impl BatchScheduler {
                 bundles: BTreeSet::new(),
                 unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
                 checked_tx: BTreeSet::new(),
-                executing_tx: HashSet::new(),
-                deferred_tx: Vec::new(),
+                executing_tx: HashSet::with_capacity(CHECKED_CAPACITY),
+                deferred_tx: IndexSet::with_capacity(CHECKED_CAPACITY),
                 next_recheck: None,
                 in_flight_cus: 0,
                 in_flight_locks: HashMap::new(),
@@ -740,8 +741,9 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        // If transaction is currently executing, ignore the recheck result.
-        if self.executing_tx.contains(&meta.key) {
+        // If transaction is currently executing (or deferred), ignore the recheck
+        // result.
+        if self.executing_tx.contains(&meta.key) || self.deferred_tx.contains(&meta) {
             return TxDecision::Keep;
         }
 
@@ -859,10 +861,8 @@ impl BatchScheduler {
         match rep.execution_slot == self.slot
             && rep.not_included_reason != not_included_reasons::ACCOUNT_IN_USE
         {
-            true => self.deferred_tx.push(meta),
-            false => {
-                self.checked_tx.insert(meta);
-            }
+            true => assert!(self.deferred_tx.insert(meta)),
+            false => assert!(self.checked_tx.insert(meta)),
         }
 
         // Evict from checked_tx if over capacity.

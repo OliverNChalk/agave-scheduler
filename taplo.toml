@@ -8,6 +8,7 @@ keys = [
   "build-dependencies",
   "dependencies",
   "dev-dependencies",
+  "features",
   "lints.clippy",
   "patch",
   "toolchain",
@@ -17,3 +18,4 @@ keys = [
 
 [rule.formatting]
 reorder_keys = true
+reorder_arrays = true
