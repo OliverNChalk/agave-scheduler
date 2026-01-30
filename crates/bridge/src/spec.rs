@@ -1,7 +1,6 @@
 use agave_feature_set::FeatureSet;
-use agave_scheduler_bindings::ProgressMessage;
-use agave_scheduler_bindings::tpu_message_flags;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
+use agave_scheduler_bindings::{ProgressMessage, tpu_message_flags};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::result::TransactionViewError;
@@ -105,7 +104,8 @@ pub struct TransactionState {
 }
 
 impl TransactionState {
-    pub fn is_simple_vote(&self) -> bool {
+    #[must_use]
+    pub const fn is_simple_vote(&self) -> bool {
         self.flags & tpu_message_flags::IS_SIMPLE_VOTE != 0
     }
 
