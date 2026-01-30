@@ -741,7 +741,8 @@ impl BatchScheduler {
     where
         B: Bridge<Meta = PriorityId>,
     {
-        // If transaction is currently executing, ignore the recheck result.
+        // If transaction is currently executing (or deferred), ignore the recheck
+        // result.
         if self.executing_tx.contains(&meta.key) || self.deferred_tx.contains(&meta) {
             return TxDecision::Keep;
         }
