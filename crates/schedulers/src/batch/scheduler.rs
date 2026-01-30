@@ -108,45 +108,53 @@ impl BatchScheduler {
     pub fn new(
         shutdown: Shutdown,
         events: Option<EventEmitter>,
-        BatchSchedulerArgs { tip, jito, keypair }: BatchSchedulerArgs,
-    ) -> (Self, Vec<JoinHandle<()>>) {
+        args: BatchSchedulerArgs,
+    ) -> (Self, JoinHandle<()>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(1024);
-        let jito_thread = JitoThread::spawn(shutdown.clone(), jito_tx, jito, keypair);
+        let jito_thread =
+            JitoThread::spawn(shutdown.clone(), jito_tx, args.jito.clone(), args.keypair);
 
+        (Self::new_with_jito(shutdown, events, args, jito_rx), jito_thread)
+    }
+
+    #[must_use]
+    fn new_with_jito(
+        shutdown: Shutdown,
+        events: Option<EventEmitter>,
+        BatchSchedulerArgs { tip, jito: _, keypair }: BatchSchedulerArgs,
+        jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
+    ) -> Self {
         let JitoUpdate::BuilderConfig(builder_config) =
             jito_rx.recv_timeout(Duration::from_secs(5)).unwrap()
         else {
             panic!();
         };
 
-        (
-            Self {
-                shutdown,
-                jito_rx,
-                tip_distribution_config: tip,
-                keypair,
+        Self {
+            shutdown,
+            jito_rx,
+            tip_distribution_config: tip,
+            keypair,
 
-                builder_config,
-                tip_config: None,
-                recent_blockhash: Hash::default(),
-                bundles: BTreeSet::new(),
-                unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
-                checked_tx: BTreeSet::new(),
-                executing_tx: HashSet::with_capacity(CHECKED_CAPACITY),
-                deferred_tx: IndexSet::with_capacity(CHECKED_CAPACITY),
-                next_recheck: None,
-                in_flight_cus: 0,
-                in_flight_locks: HashMap::new(),
-                schedule_batch: Vec::new(),
-                last_progress_time: Instant::now(),
+            builder_config,
+            tip_config: None,
+            recent_blockhash: Hash::default(),
+            bundles: BTreeSet::new(),
+            unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            checked_tx: BTreeSet::new(),
+            executing_tx: HashSet::with_capacity(CHECKED_CAPACITY),
+            deferred_tx: IndexSet::with_capacity(CHECKED_CAPACITY),
+            next_recheck: None,
+            in_flight_cus: 0,
+            in_flight_locks: HashMap::new(),
+            schedule_batch: Vec::new(),
+            last_progress_time: Instant::now(),
 
-                events,
-                slot: 0,
-                slot_stats: SlotStatsEvent::default(),
-                metrics: BatchMetrics::new(),
-            },
-            vec![jito_thread],
-        )
+            events,
+            slot: 0,
+            slot_stats: SlotStatsEvent::default(),
+            metrics: BatchMetrics::new(),
+        }
     }
 
     pub fn poll<B>(&mut self, bridge: &mut B)

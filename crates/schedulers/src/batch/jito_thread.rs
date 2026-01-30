@@ -29,7 +29,7 @@ use tracing::{error, info};
 
 use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JitoArgs {
     pub http_rpc: String,
     pub ws_rpc: String,
