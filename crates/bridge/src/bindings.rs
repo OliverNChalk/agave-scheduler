@@ -190,6 +190,7 @@ where
                 let key = self.state.insert(TransactionState {
                     dead: false,
                     borrows: 0,
+                    flags: 0,
                     data: tx,
                     keys: None,
                 });
@@ -292,6 +293,7 @@ where
             let key = self.state.insert(TransactionState {
                 dead: false,
                 borrows: 0,
+                flags: msg.flags,
                 data: tx,
                 keys: None,
             });
