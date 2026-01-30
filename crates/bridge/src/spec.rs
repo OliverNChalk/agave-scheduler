@@ -1,5 +1,6 @@
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::ProgressMessage;
+use agave_scheduler_bindings::tpu_message_flags;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
@@ -98,11 +99,16 @@ slotmap::new_key_type! {
 pub struct TransactionState {
     pub dead: bool,
     pub borrows: u64,
+    pub flags: u8,
     pub data: SanitizedTransactionView<TransactionPtr>,
     pub keys: Option<PubkeysPtr>,
 }
 
 impl TransactionState {
+    pub fn is_simple_vote(&self) -> bool {
+        self.flags & tpu_message_flags::IS_SIMPLE_VOTE != 0
+    }
+
     pub fn locks(&self) -> impl Iterator<Item = (&Pubkey, bool)> {
         self.write_locks()
             .map(|lock| (lock, true))
