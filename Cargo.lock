@@ -166,6 +166,7 @@ dependencies = [
  "eyre",
  "futures",
  "hashbrown 0.16.1",
+ "indexmap 2.13.0",
  "jito-protos",
  "metrics",
  "min-max-heap",
