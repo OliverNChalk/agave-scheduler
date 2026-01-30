@@ -410,15 +410,7 @@ impl BatchScheduler {
                         return TxDecision::Drop;
                     }
 
-                    // Skip checking votes.
-                    let id = PriorityId { priority, cost, key };
-                    match bridge.tx(key).is_simple_vote() {
-                        // TODO: Someone could fill our checked capacity with unspendable vote
-                        // transactions with ultra high priority...
-                        true => self.insert_checked(bridge, id),
-                        false => self.unchecked_tx.push(id),
-                    }
-
+                    self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
                         bridge,
                         key,
@@ -649,11 +641,6 @@ impl BatchScheduler {
                         continue;
                     }
 
-                    // We don't check vote transactions (beyond sig validity).
-                    if bridge.tx(curr.key).is_simple_vote() {
-                        continue;
-                    }
-
                     return Some(KeyedTransactionMeta { key: curr.key, meta: curr });
                 }
 
@@ -808,8 +795,24 @@ impl BatchScheduler {
             return TxDecision::Keep;
         }
 
-        // Insert the new checked TX.
-        self.insert_checked(bridge, meta);
+        // First check. Evict lowest priority if at capacity.
+        if self.pending_len() >= CHECKED_CAPACITY {
+            let id = self.checked_tx.pop_first().unwrap();
+            self.emit_tx_event(
+                bridge,
+                id.key,
+                id.priority,
+                TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
+            );
+            bridge.tx_drop(id.key);
+
+            self.metrics.check_evict.increment(1);
+        }
+
+        // Insert the new transaction (yes this may be lower priority than what
+        // we just evicted but that's fine).
+        self.checked_tx.insert(meta);
+        self.emit_tx_event(bridge, meta.key, meta.priority, TransactionAction::CheckOk);
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);
@@ -895,30 +898,6 @@ impl BatchScheduler {
                 | not_included_reasons::WOULD_EXCEED_MAX_VOTE_COST_LIMIT
                 | not_included_reasons::WOULD_EXCEED_ACCOUNT_DATA_TOTAL_LIMIT
         )
-    }
-
-    fn insert_checked<B>(&mut self, bridge: &mut B, meta: PriorityId)
-    where
-        B: Bridge,
-    {
-        // First check. Evict lowest priority if at capacity.
-        if self.pending_len() >= CHECKED_CAPACITY {
-            let id = self.checked_tx.pop_first().unwrap();
-            self.emit_tx_event(
-                bridge,
-                id.key,
-                id.priority,
-                TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
-            );
-            bridge.tx_drop(id.key);
-
-            self.metrics.check_evict.increment(1);
-        }
-
-        // Insert the new transaction (yes this may be lower priority than what
-        // we just evicted but that's fine).
-        self.checked_tx.insert(meta);
-        self.emit_tx_event(bridge, meta.key, meta.priority, TransactionAction::CheckOk);
     }
 
     /// Trys to schedule a transaction.
