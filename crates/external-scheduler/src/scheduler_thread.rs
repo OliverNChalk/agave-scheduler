@@ -14,6 +14,7 @@ pub(crate) fn spawn<S>(
     shutdown: Shutdown,
     bindings_ipc: PathBuf,
     mut scheduler: S,
+    logon_flags: u16,
 ) -> JoinHandle<()>
 where
     S: Scheduler + Send,
@@ -32,7 +33,7 @@ where
                     progress_tracker_capacity: 128,
                     pack_to_worker_capacity: 128,
                     worker_to_pack_capacity: 256,
-                    flags: 0,
+                    flags: logon_flags,
                 },
                 Duration::from_secs(1),
             )

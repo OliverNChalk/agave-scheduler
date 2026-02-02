@@ -382,7 +382,7 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         let additional = std::cmp::min(bridge.tpu_len(), max_count);
-        let shortfall = (self.checked_tx.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
+        let shortfall = (self.unchecked_tx.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
 
         // NB: Technically we are evicting more than we need to because not all of
         // `additional` will parse correctly & thus have a priority.
@@ -887,6 +887,9 @@ impl BatchScheduler {
     }
 
     const fn is_retryable(reason: u8) -> bool {
+        // TODO: Enable
+        // assert_ne!(reason, not_included_reasons::ACCOUNT_IN_USE);
+
         matches!(
             reason,
             not_included_reasons::ACCOUNT_IN_USE
@@ -1126,12 +1129,18 @@ impl BatchScheduler {
         priority: u64,
         action: TransactionAction,
     ) where
-        B: Bridge<Meta = PriorityId>,
+        B: Bridge,
     {
         let Some(events) = &self.events else { return };
 
+        // Don't emit for vote TXs (save my disk/familia).
+        let tx = bridge.tx(key);
+        if tx.is_simple_vote() {
+            return;
+        }
+
         events.emit(Event::Transaction(TransactionEvent {
-            signature: bridge.tx(key).data.signatures()[0],
+            signature: tx.data.signatures()[0],
             slot: self.slot,
             priority,
             action,

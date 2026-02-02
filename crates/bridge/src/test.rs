@@ -84,9 +84,13 @@ where
         let data = SanitizedTransactionView::try_new_sanitized(data, true).unwrap();
 
         // Insert into state & store the key in the tpu queue.
-        let key = self
-            .state
-            .insert(TransactionState { dead: false, borrows: 0, data, keys: None });
+        let key = self.state.insert(TransactionState {
+            dead: false,
+            borrows: 0,
+            flags: 0,
+            data,
+            keys: None,
+        });
         self.tpu_queue.push_back(key);
     }
 
@@ -239,9 +243,13 @@ where
         let data = SanitizedTransactionView::try_new_sanitized(data, true)?;
 
         // Insert into state & return the key.
-        let key = self
-            .state
-            .insert(TransactionState { dead: false, borrows: 0, data, keys: None });
+        let key = self.state.insert(TransactionState {
+            dead: false,
+            borrows: 0,
+            flags: 0,
+            data,
+            keys: None,
+        });
 
         Ok(key)
     }
