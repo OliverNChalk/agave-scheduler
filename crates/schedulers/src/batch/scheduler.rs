@@ -1313,3 +1313,80 @@ struct BundleId {
     received_at: Instant,
     keys: Vec<TransactionKey>,
 }
+
+#[cfg(test)]
+mod tests {
+    use agave_bridge::TestBridge;
+    use agave_scheduler_bindings::pack_message_flags;
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
+    use solana_hash::Hash;
+    use solana_keypair::{Keypair, Signer};
+    use solana_pubkey::Pubkey;
+    use solana_transaction::Transaction;
+    use solana_transaction::versioned::VersionedTransaction;
+    use toolbox::shutdown::Shutdown;
+
+    use super::*;
+
+    fn test_scheduler() -> (BatchScheduler, crossbeam_channel::Sender<JitoUpdate>) {
+        let (jito_tx, jito_rx) = crossbeam_channel::bounded(1024);
+
+        // Scheduler blocks until we give it an initial builder config.
+        jito_tx
+            .send(JitoUpdate::BuilderConfig(BuilderConfig {
+                key: Pubkey::new_unique(),
+                commission: 0,
+            }))
+            .unwrap();
+
+        let args = BatchSchedulerArgs {
+            tip: TipDistributionArgs {
+                vote_account: Pubkey::new_unique(),
+                merkle_authority: Pubkey::new_unique(),
+                commission_bps: 0,
+            },
+            jito: JitoArgs {
+                http_rpc: String::new(),
+                ws_rpc: String::new(),
+                block_engine: String::new(),
+            },
+            keypair: Box::leak(Box::new(Keypair::new())),
+        };
+        let scheduler = BatchScheduler::new_with_jito(Shutdown::new(), None, args, jito_rx);
+
+        (scheduler, jito_tx)
+    }
+
+    fn noop_with_budget(payer: &Keypair, cu_limit: u32, cu_price: u64) -> VersionedTransaction {
+        Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
+                ComputeBudgetInstruction::set_compute_unit_price(cu_price),
+            ],
+            Some(&payer.pubkey()),
+            &[payer],
+            Hash::new_from_array([1; 32]),
+        )
+        .into()
+    }
+
+    #[test]
+    fn tpu_recv_schedules_check() {
+        let (mut scheduler, _jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Ingest a transaction via TPU.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Poll the scheduler.
+        scheduler.poll(&mut bridge);
+
+        // Assert - A single check request was scheduled.
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
+        assert_eq!(bridge.pop_schedule(), None);
+    }
+}
