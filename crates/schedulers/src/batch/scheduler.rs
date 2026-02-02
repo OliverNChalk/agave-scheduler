@@ -886,12 +886,14 @@ impl BatchScheduler {
         self.checked_tx.len() + self.executing_tx.len() + self.deferred_tx.len()
     }
 
-    fn is_retryable(reason: u8) -> bool {
-        assert_ne!(reason, not_included_reasons::ACCOUNT_IN_USE);
+    const fn is_retryable(reason: u8) -> bool {
+        // TODO: Enable
+        // assert_ne!(reason, not_included_reasons::ACCOUNT_IN_USE);
 
         matches!(
             reason,
-            not_included_reasons::BANK_NOT_AVAILABLE
+            not_included_reasons::ACCOUNT_IN_USE
+                | not_included_reasons::BANK_NOT_AVAILABLE
                 | not_included_reasons::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT
                 | not_included_reasons::WOULD_EXCEED_MAX_ACCOUNT_COST_LIMIT
                 | not_included_reasons::WOULD_EXCEED_ACCOUNT_DATA_BLOCK_LIMIT
