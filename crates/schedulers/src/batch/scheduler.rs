@@ -1328,6 +1328,9 @@ mod tests {
 
     use super::*;
 
+    //////////
+    // Helpers
+
     const MOCK_PROGRESS: ProgressMessage = ProgressMessage {
         leader_state: NOT_LEADER,
         current_slot: 10,
@@ -1379,25 +1382,8 @@ mod tests {
         .into()
     }
 
-    #[test]
-    fn tpu_recv_schedules_check() {
-        let (mut scheduler, _jito_tx) = test_scheduler();
-        let mut bridge = TestBridge::new(5, 4);
-
-        // Ingest a transaction via TPU.
-        let payer = Keypair::new();
-        let tx = noop_with_budget(&payer, 25_000, 100);
-        bridge.queue_tpu(&tx);
-
-        // Poll the scheduler.
-        scheduler.poll(&mut bridge);
-
-        // Assert - A single check request was scheduled.
-        let batch = bridge.pop_schedule().unwrap();
-        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
-        assert_eq!(batch.transactions.len(), 1);
-        assert_eq!(bridge.pop_schedule(), None);
-    }
+    ////////////////////////
+    // Misc
 
     #[test]
     fn leader_ready_triggers_become_receiver() {
@@ -1437,6 +1423,29 @@ mod tests {
         assert_eq!(batch1.worker, EXECUTE_WORKER_START);
 
         // Assert - Nothing else scheduled.
+        assert_eq!(bridge.pop_schedule(), None);
+    }
+
+    //////
+    // TPU
+
+    #[test]
+    fn tpu_recv_schedules_check() {
+        let (mut scheduler, _jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Ingest a transaction via TPU.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Poll the scheduler.
+        scheduler.poll(&mut bridge);
+
+        // Assert - A single check request was scheduled.
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
         assert_eq!(bridge.pop_schedule(), None);
     }
 }
