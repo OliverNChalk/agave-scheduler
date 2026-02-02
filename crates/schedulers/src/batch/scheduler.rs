@@ -1478,4 +1478,63 @@ mod tests {
         // Assert - TX was dropped from bridge.
         assert_eq!(bridge.tx_count(), 0);
     }
+
+    ///////////////
+    // Jito Packets
+
+    #[test]
+    fn jito_packet_schedules_check() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Send a packet via jito channel.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        jito_tx
+            .send(JitoUpdate::Packet(bincode::serialize(&tx).unwrap()))
+            .unwrap();
+
+        // Poll to drain jito messages and schedule checks.
+        scheduler.poll(&mut bridge);
+
+        // Assert - A single check request was scheduled.
+        let batch = bridge.pop_schedule().unwrap();
+        assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(batch.transactions.len(), 1);
+        assert_eq!(bridge.pop_schedule(), None);
+    }
+
+    #[test]
+    fn jito_packet_filters_tip_program() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Send a packet that invokes the tip payment program.
+        let payer = Keypair::new();
+        let tx: VersionedTransaction = Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(25_000),
+                ComputeBudgetInstruction::set_compute_unit_price(100),
+                Instruction {
+                    program_id: TIP_PAYMENT_PROGRAM,
+                    accounts: vec![],
+                    data: vec![],
+                },
+            ],
+            Some(&payer.pubkey()),
+            &[&payer],
+            Hash::new_from_array([1; 32]),
+        )
+        .into();
+        jito_tx
+            .send(JitoUpdate::Packet(bincode::serialize(&tx).unwrap()))
+            .unwrap();
+
+        // Poll to drain jito messages.
+        scheduler.poll(&mut bridge);
+
+        // Assert - No check scheduled and TX dropped from bridge.
+        assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(bridge.tx_count(), 0);
+    }
 }
