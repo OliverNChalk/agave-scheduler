@@ -1317,7 +1317,7 @@ struct BundleId {
 #[cfg(test)]
 mod tests {
     use agave_bridge::TestBridge;
-    use agave_scheduler_bindings::pack_message_flags;
+    use agave_scheduler_bindings::{NOT_LEADER, ProgressMessage, pack_message_flags};
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Signer};
@@ -1327,6 +1327,15 @@ mod tests {
     use toolbox::shutdown::Shutdown;
 
     use super::*;
+
+    const MOCK_PROGRESS: ProgressMessage = ProgressMessage {
+        leader_state: NOT_LEADER,
+        current_slot: 10,
+        next_leader_slot: 11,
+        leader_range_end: 11,
+        remaining_cost_units: 50_000_000,
+        current_slot_progress: 25,
+    };
 
     fn test_scheduler() -> (BatchScheduler, crossbeam_channel::Sender<JitoUpdate>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(1024);
@@ -1387,6 +1396,47 @@ mod tests {
         let batch = bridge.pop_schedule().unwrap();
         assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
         assert_eq!(batch.transactions.len(), 1);
+        assert_eq!(bridge.pop_schedule(), None);
+    }
+
+    #[test]
+    fn leader_ready_triggers_become_receiver() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Initial jito config & slot status indicating leader not ready.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(ProgressMessage { current_slot: 1, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
+
+        // Transition to leader & poll.
+        bridge.queue_progress(ProgressMessage {
+            leader_state: LEADER_READY,
+            current_slot: 1,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        // Assert - our become receiver batches scheduled.
+        let expected_flags = pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE;
+
+        let batch0 = bridge.pop_schedule().unwrap();
+        assert_eq!(batch0.flags, expected_flags);
+        assert_eq!(batch0.transactions.len(), 1);
+        assert_eq!(batch0.worker, EXECUTE_WORKER_START);
+
+        let batch1 = bridge.pop_schedule().unwrap();
+        assert_eq!(batch1.flags, expected_flags);
+        assert_eq!(batch1.transactions.len(), 1);
+        assert_eq!(batch1.worker, EXECUTE_WORKER_START);
+
+        // Assert - Nothing else scheduled.
         assert_eq!(bridge.pop_schedule(), None);
     }
 }
