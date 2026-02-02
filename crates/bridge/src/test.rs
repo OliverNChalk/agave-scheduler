@@ -166,6 +166,11 @@ where
     }
 
     #[must_use]
+    pub fn tx_count(&self) -> usize {
+        self.state.len()
+    }
+
+    #[must_use]
     pub fn contains_tx(&self, key: TransactionKey) -> bool {
         self.state.contains_key(key)
     }
@@ -282,7 +287,9 @@ where
                 return;
             };
 
-            cb(self, tx);
+            if cb(self, tx) == TxDecision::Drop {
+                self.state.remove(tx).unwrap();
+            }
         }
     }
 

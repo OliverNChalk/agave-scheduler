@@ -1322,8 +1322,8 @@ mod tests {
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Signer};
     use solana_pubkey::Pubkey;
-    use solana_transaction::Transaction;
     use solana_transaction::versioned::VersionedTransaction;
+    use solana_transaction::{Instruction, Transaction};
     use toolbox::shutdown::Shutdown;
 
     use super::*;
@@ -1447,5 +1447,35 @@ mod tests {
         assert_eq!(batch.flags & 1, pack_message_flags::CHECK);
         assert_eq!(batch.transactions.len(), 1);
         assert_eq!(bridge.pop_schedule(), None);
+    }
+
+    #[test]
+    fn tpu_recv_filters_tip_program() {
+        let (mut scheduler, _jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Build a TX that invokes the tip payment program (should be filtered).
+        let payer = Keypair::new();
+        let tx: VersionedTransaction = Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(25_000),
+                ComputeBudgetInstruction::set_compute_unit_price(100),
+                Instruction { program_id: TIP_PAYMENT_PROGRAM, accounts: vec![], data: vec![] },
+            ],
+            Some(&payer.pubkey()),
+            &[&payer],
+            Hash::new_from_array([1; 32]),
+        )
+        .into();
+        bridge.queue_tpu(&tx);
+
+        // Poll the scheduler.
+        scheduler.poll(&mut bridge);
+
+        // Assert - No check scheduled (TX was filtered).
+        assert_eq!(bridge.pop_schedule(), None);
+
+        // Assert - TX was dropped from bridge.
+        assert_eq!(bridge.tx_count(), 0);
     }
 }
