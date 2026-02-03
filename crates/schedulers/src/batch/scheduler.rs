@@ -1515,11 +1515,7 @@ mod tests {
             &[
                 ComputeBudgetInstruction::set_compute_unit_limit(25_000),
                 ComputeBudgetInstruction::set_compute_unit_price(100),
-                Instruction {
-                    program_id: TIP_PAYMENT_PROGRAM,
-                    accounts: vec![],
-                    data: vec![],
-                },
+                Instruction { program_id: TIP_PAYMENT_PROGRAM, accounts: vec![], data: vec![] },
             ],
             Some(&payer.pubkey()),
             &[&payer],
@@ -1535,6 +1531,99 @@ mod tests {
 
         // Assert - No check scheduled and TX dropped from bridge.
         assert_eq!(bridge.pop_schedule(), None);
+        assert_eq!(bridge.tx_count(), 0);
+    }
+
+    ///////////////
+    // Jito Bundles
+
+    fn serialize_tx(tx: &VersionedTransaction) -> Vec<u8> {
+        bincode::serialize(tx).unwrap()
+    }
+
+    #[test]
+    fn jito_bundle_ingested() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Build a 2-TX bundle.
+        let payer_a = Keypair::new();
+        let payer_b = Keypair::new();
+        let tx_a = noop_with_budget(&payer_a, 25_000, 100);
+        let tx_b = noop_with_budget(&payer_b, 25_000, 200);
+        jito_tx
+            .send(JitoUpdate::Bundle(vec![serialize_tx(&tx_a), serialize_tx(&tx_b)]))
+            .unwrap();
+
+        // Poll to drain jito messages.
+        scheduler.poll(&mut bridge);
+
+        // Assert - Bundle is stored in the scheduler.
+        assert_eq!(scheduler.bundles.len(), 1);
+
+        // Assert - Both TXs are in the bridge.
+        assert_eq!(bridge.tx_count(), 2);
+
+        // Assert - Bundles skip check; no check batches scheduled.
+        assert_eq!(bridge.pop_schedule(), None);
+    }
+
+    #[test]
+    fn jito_bundle_filters_tip_program() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Build a 2-TX bundle where the second TX invokes the tip program.
+        let payer_a = Keypair::new();
+        let payer_b = Keypair::new();
+        let tx_a = noop_with_budget(&payer_a, 25_000, 100);
+        let tx_b: VersionedTransaction = Transaction::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(25_000),
+                ComputeBudgetInstruction::set_compute_unit_price(100),
+                Instruction { program_id: TIP_PAYMENT_PROGRAM, accounts: vec![], data: vec![] },
+            ],
+            Some(&payer_b.pubkey()),
+            &[&payer_b],
+            Hash::new_from_array([1; 32]),
+        )
+        .into();
+        jito_tx
+            .send(JitoUpdate::Bundle(vec![serialize_tx(&tx_a), serialize_tx(&tx_b)]))
+            .unwrap();
+
+        // Poll to drain jito messages.
+        scheduler.poll(&mut bridge);
+
+        // Assert - Entire bundle rejected; no bundles stored.
+        assert_eq!(scheduler.bundles.len(), 0);
+
+        // Assert - All TXs from the bundle are dropped from bridge.
+        assert_eq!(bridge.tx_count(), 0);
+    }
+
+    #[test]
+    fn jito_bundle_dropped_if_any_tx_invalid() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Build a bundle where the second entry is garbage bytes.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        jito_tx
+            .send(JitoUpdate::Bundle(vec![
+                serialize_tx(&tx),
+                vec![0xDE, 0xAD], // invalid TX
+            ]))
+            .unwrap();
+
+        // Poll to drain jito messages.
+        scheduler.poll(&mut bridge);
+
+        // Assert - Entire bundle rejected.
+        assert_eq!(scheduler.bundles.len(), 0);
+
+        // Assert - All TXs (including the valid first one) are dropped.
         assert_eq!(bridge.tx_count(), 0);
     }
 }
