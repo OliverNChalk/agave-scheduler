@@ -10,7 +10,7 @@ use agave_scheduler_bindings::{
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
-use agave_scheduling_utils::transaction_ptr::TransactionPtr;
+use agave_scheduling_utils::transaction_ptr::{TransactionPtr, TransactionPtrBatch};
 use agave_transaction_view::result::TransactionViewError;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use metrics::{Gauge, gauge};
@@ -38,17 +38,14 @@ pub struct SchedulerBindings<M> {
     metrics: SchedulerBindingsMetrics,
 }
 
+type Batch<'a, M> = TransactionPtrBatch<'a, KeyedTransactionMeta<M>>;
+
 impl<M> SchedulerBindings<M>
 where
     M: Copy,
 {
-    // TODO: Duplicated from scheduling_utils::transaction_ptr.
-    const TX_CORE_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
-    const TX_TOTAL_SIZE: usize =
-        Self::TX_CORE_SIZE + std::mem::size_of::<KeyedTransactionMeta<M>>();
-    const TX_BATCH_META_OFFSET: usize = Self::TX_CORE_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
-    const TX_BATCH_SIZE: usize = Self::TX_TOTAL_SIZE * MAX_TRANSACTIONS_PER_MESSAGE;
-    const _TX_BATCH_SIZE_ASSERT: () = assert!(Self::TX_BATCH_SIZE < 4096);
+    const TX_BATCH_META_OFFSET: usize = Batch::<M>::TX_META_START;
+    const TX_BATCH_SIZE: usize = Batch::<M>::TX_META_END;
 
     #[must_use]
     pub fn new(
