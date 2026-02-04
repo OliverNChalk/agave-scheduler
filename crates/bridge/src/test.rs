@@ -100,12 +100,22 @@ where
         index: usize,
         keys: Option<Vec<Pubkey>>,
     ) {
+        self.queue_check_response_with(batch, index, keys, self.check_ok());
+    }
+
+    pub fn queue_check_response_with(
+        &mut self,
+        batch: &ScheduleBatch<Vec<KeyedTransactionMeta<M>>>,
+        index: usize,
+        keys: Option<Vec<Pubkey>>,
+        response: CheckResponse,
+    ) {
         let tx = batch.transactions[index];
 
         // Insert the keys (if any).
         self.state[tx.key].keys = keys.map(Self::allocate_pubkeys_ptr);
 
-        let rep = (tx, WorkerActionLite::Check(self.check_ok()));
+        let rep = (tx, WorkerActionLite::Check(response));
         self.worker_queues[batch.worker].push_back(rep);
     }
 

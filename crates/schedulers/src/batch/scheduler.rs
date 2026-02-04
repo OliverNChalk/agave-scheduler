@@ -1317,6 +1317,9 @@ struct BundleId {
 #[cfg(test)]
 mod tests {
     use agave_bridge::TestBridge;
+    use agave_scheduler_bindings::worker_message_types::{
+        CheckResponse, parsing_and_sanitization_flags, resolve_flags, status_check_flags,
+    };
     use agave_scheduler_bindings::{NOT_LEADER, ProgressMessage, pack_message_flags};
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
@@ -1625,5 +1628,263 @@ mod tests {
 
         // Assert - All TXs (including the valid first one) are dropped.
         assert_eq!(bridge.tx_count(), 0);
+    }
+
+    ///////////////////
+    // Validation flow
+
+    #[test]
+    fn check_ok_moves_to_checked() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Ingest a transaction via TPU.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Poll - TX ingested into unchecked, CHECK batch scheduled.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.unchecked_tx.len(), 0); // drained to check worker
+        let check_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(check_batch.flags & 1, pack_message_flags::CHECK);
+        assert_eq!(check_batch.transactions.len(), 1);
+
+        // Queue a successful check response.
+        bridge.queue_check_response(&check_batch, 0, None);
+
+        // Poll - check response drained, TX moves to checked.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.checked_tx.len(), 1);
+        assert_eq!(bridge.tx_count(), 1);
+
+        // Provide tip config (drained by a non-leader poll before becoming leader).
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Transition to leader - TX should be scheduled for execution.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
+        let tip0 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip0.flags & pack_message_flags::EXECUTE, 0);
+        let tip1 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip1.flags & pack_message_flags::EXECUTE, 0);
+
+        // Next scheduled batch should be our checked TX.
+        let exec_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(exec_batch.flags, pack_message_flags::EXECUTE);
+        assert_eq!(exec_batch.transactions.len(), 1);
+        assert_eq!(exec_batch.transactions[0].key, check_batch.transactions[0].key);
+
+        // TX moved from checked to executing.
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert!(
+            scheduler
+                .executing_tx
+                .contains(&check_batch.transactions[0].key)
+        );
+    }
+
+    #[test]
+    fn check_err_drops_transaction() {
+        let (mut scheduler, _jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Ingest three TXs so we can test each failure mode.
+        let payers: Vec<_> = (0..3).map(|_| Keypair::new()).collect();
+        for payer in &payers {
+            let tx = noop_with_budget(payer, 25_000, 100);
+            bridge.queue_tpu(&tx);
+        }
+
+        // Poll - all three are checked.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        let check_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(check_batch.transactions.len(), 3);
+
+        // Queue failures: parse error, resolve error, status error.
+        let parse_fail = CheckResponse {
+            parsing_and_sanitization_flags: parsing_and_sanitization_flags::FAILED,
+            ..bridge.check_ok()
+        };
+        let resolve_fail = CheckResponse {
+            resolve_flags: resolve_flags::REQUESTED
+                | resolve_flags::PERFORMED
+                | resolve_flags::FAILED,
+            ..bridge.check_ok()
+        };
+        let status_fail = CheckResponse {
+            status_check_flags: status_check_flags::REQUESTED
+                | status_check_flags::PERFORMED
+                | status_check_flags::ALREADY_PROCESSED,
+            ..bridge.check_ok()
+        };
+        bridge.queue_check_response_with(&check_batch, 0, None, parse_fail);
+        bridge.queue_check_response_with(&check_batch, 1, None, resolve_fail);
+        bridge.queue_check_response_with(&check_batch, 2, None, status_fail);
+
+        // Poll.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Asset - all 3 are dropped.
+        assert_eq!(scheduler.unchecked_tx.len(), 0);
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert_eq!(bridge.tx_count(), 0);
+    }
+
+    #[test]
+    fn recheck_during_leader_slot() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Zero remaining CUs so can't execute (allows us to just re-check).
+        let leader_no_budget = ProgressMessage {
+            leader_state: LEADER_READY,
+            remaining_cost_units: 0,
+            ..MOCK_PROGRESS
+        };
+
+        // TPU ingest.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+
+        // Scheduler picks up TX from tpu queue.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+
+        // Scheduler picks up check result from worker queue.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Asser - TX moves to check.
+        assert_eq!(scheduler.checked_tx.len(), 1);
+        let checked_meta = *scheduler.checked_tx.last().unwrap();
+
+        // Tip config needed for our leader slot.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // First leader poll we become leader & next_recheck is set.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        assert!(scheduler.checked_tx.contains(&checked_meta));
+        while bridge.pop_schedule().is_some() {}
+
+        // Second leader poll, we queue the recheck to the worker.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+
+        // Assert - the check should contain our checked TX (recheck).
+        let recheck_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(recheck_batch.flags & 1, pack_message_flags::CHECK);
+        assert!(
+            recheck_batch
+                .transactions
+                .iter()
+                .any(|t| t.key == checked_meta.key)
+        );
+
+        // Queue a successful recheck response.
+        let idx = recheck_batch
+            .transactions
+            .iter()
+            .position(|t| t.key == checked_meta.key)
+            .unwrap();
+        bridge.queue_check_response(&recheck_batch, idx, None);
+
+        // Poll - recheck OK is a no-op; TX stays in checked.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        assert!(scheduler.checked_tx.contains(&checked_meta));
+        assert!(bridge.contains_tx(checked_meta.key));
+    }
+
+    #[test]
+    fn recheck_failure_removes_from_checked() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Use zero remaining CUs so the TX stays in checked during recheck.
+        let leader_no_budget = ProgressMessage {
+            leader_state: LEADER_READY,
+            remaining_cost_units: 0,
+            ..MOCK_PROGRESS
+        };
+
+        // Poll - Ingest and check a TX so it lands in checked.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Poll - Checks ok.
+        bridge.queue_all_checks_ok();
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.checked_tx.len(), 1);
+        let checked_meta = *scheduler.checked_tx.last().unwrap();
+
+        // Provide tip config and drain it before becoming leader.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        scheduler.poll(&mut bridge);
+
+        // Poll - become_tip_receiver fires, TX stays in checked (no budget),
+        // next_recheck set.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        while bridge.pop_schedule().is_some() {} // Could be 1 batch in future.
+
+        // Poll - schedule_checks fires the recheck.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+
+        // Assert - One batch is scheduled (recheck).
+        let recheck_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(recheck_batch.flags & 1, pack_message_flags::CHECK);
+        let idx = recheck_batch
+            .transactions
+            .iter()
+            .position(|t| t.key == checked_meta.key)
+            .unwrap();
+        assert!(bridge.pop_schedule().is_none());
+
+        // Poll - Recheck fails.
+        let status_fail = CheckResponse {
+            status_check_flags: status_check_flags::REQUESTED
+                | status_check_flags::PERFORMED
+                | status_check_flags::ALREADY_PROCESSED,
+            ..bridge.check_ok()
+        };
+        bridge.queue_check_response_with(&recheck_batch, idx, None, status_fail);
+        scheduler.poll(&mut bridge);
+
+        // Assert - Checked TX dropped.
+        assert!(!scheduler.checked_tx.contains(&checked_meta));
+        assert!(!bridge.contains_tx(checked_meta.key));
     }
 }
