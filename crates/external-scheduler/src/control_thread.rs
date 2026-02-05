@@ -69,7 +69,7 @@ impl ControlThread {
             SchedulerConfig::Batch(batch) => {
                 let keypair =
                     Box::leak(Box::new(Keypair::read_from_file(batch.keypair_path).unwrap()));
-                let (scheduler, workers) = batch::BatchScheduler::new(
+                let (scheduler, jito_thread) = batch::BatchScheduler::new(
                     shutdown.clone(),
                     Some(events),
                     batch::BatchSchedulerArgs {
@@ -84,6 +84,9 @@ impl ControlThread {
                             block_engine: batch.jito.block_engine,
                         },
                         keypair,
+                        unchecked_capacity: 64 * 1024,
+                        checked_capacity: 64 * 1024,
+                        bundle_capacity: 1024,
                     },
                 );
 
@@ -93,7 +96,7 @@ impl ControlThread {
                     scheduler,
                     logon_flags::REROUTE_VOTES,
                 ));
-                threads.extend(workers);
+                threads.push(jito_thread);
             }
             SchedulerConfig::Fifo => threads.push(crate::scheduler_thread::spawn::<FifoScheduler>(
                 shutdown.clone(),
