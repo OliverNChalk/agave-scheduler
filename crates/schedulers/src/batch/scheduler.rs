@@ -1486,50 +1486,6 @@ mod tests {
         (scheduler, bridge, jito_tx, exec_batch)
     }
 
-    ////////////////////////
-    // Misc
-
-    #[test]
-    fn leader_ready_triggers_become_receiver() {
-        let (mut scheduler, jito_tx) = test_scheduler();
-        let mut bridge = TestBridge::new(5, 4);
-
-        // Initial jito config & slot status indicating leader not ready.
-        jito_tx
-            .send(JitoUpdate::TipConfig(TipConfig {
-                tip_receiver: Pubkey::new_unique(),
-                block_builder: Pubkey::new_unique(),
-            }))
-            .unwrap();
-        bridge.queue_progress(ProgressMessage { current_slot: 1, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
-        assert_eq!(bridge.pop_schedule(), None);
-
-        // Transition to leader & poll.
-        bridge.queue_progress(ProgressMessage {
-            leader_state: LEADER_READY,
-            current_slot: 1,
-            ..MOCK_PROGRESS
-        });
-        scheduler.poll(&mut bridge);
-
-        // Assert - our become receiver batches scheduled.
-        let expected_flags = pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE;
-
-        let batch0 = bridge.pop_schedule().unwrap();
-        assert_eq!(batch0.flags, expected_flags);
-        assert_eq!(batch0.transactions.len(), 1);
-        assert_eq!(batch0.worker, EXECUTE_WORKER_START);
-
-        let batch1 = bridge.pop_schedule().unwrap();
-        assert_eq!(batch1.flags, expected_flags);
-        assert_eq!(batch1.transactions.len(), 1);
-        assert_eq!(batch1.worker, EXECUTE_WORKER_START);
-
-        // Assert - Nothing else scheduled.
-        assert_eq!(bridge.pop_schedule(), None);
-    }
-
     //////
     // TPU
 
@@ -2742,5 +2698,246 @@ mod tests {
         assert!(!scheduler.executing_tx.contains(&tx_key));
         assert_eq!(scheduler.checked_tx.len(), 0);
         assert_eq!(scheduler.deferred_tx.len(), 0);
+    }
+
+    ////////////////////////////
+    // Slot/leader transitions
+
+    #[test]
+    fn leader_ready_triggers_become_receiver() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Initial jito config & slot status indicating leader not ready.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(ProgressMessage { current_slot: 1, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+        assert_eq!(bridge.pop_schedule(), None);
+
+        // Transition to leader & poll.
+        bridge.queue_progress(ProgressMessage {
+            leader_state: LEADER_READY,
+            current_slot: 1,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        // Assert - our become receiver batches scheduled.
+        let expected_flags = pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE;
+
+        let batch0 = bridge.pop_schedule().unwrap();
+        assert_eq!(batch0.flags, expected_flags);
+        assert_eq!(batch0.transactions.len(), 1);
+        assert_eq!(batch0.worker, EXECUTE_WORKER_START);
+
+        let batch1 = bridge.pop_schedule().unwrap();
+        assert_eq!(batch1.flags, expected_flags);
+        assert_eq!(batch1.transactions.len(), 1);
+        assert_eq!(batch1.worker, EXECUTE_WORKER_START);
+
+        // Assert - Nothing else scheduled.
+        assert_eq!(bridge.pop_schedule(), None);
+    }
+
+    #[test]
+    fn leader_ready_only_fires_once_per_slot() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Provide tip config.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(ProgressMessage { current_slot: 1, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // First LEADER_READY poll - tip TXs are scheduled.
+        bridge.queue_progress(ProgressMessage {
+            leader_state: LEADER_READY,
+            current_slot: 1,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        let tip0 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip0.flags & pack_message_flags::EXECUTE, 0);
+        let tip1 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip1.flags & pack_message_flags::EXECUTE, 0);
+        while bridge.pop_schedule().is_some() {}
+
+        // Second LEADER_READY poll on the same slot - no new tip TXs.
+        bridge.queue_progress(ProgressMessage {
+            leader_state: LEADER_READY,
+            current_slot: 1,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        // Assert - no new EXECUTE|DROP_ON_FAILURE batches (become_receiver didn't fire again).
+        let expected_tip_flags = pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE;
+        while let Some(batch) = bridge.pop_schedule() {
+            assert_ne!(
+                batch.flags, expected_tip_flags,
+                "Unexpected tip batch on repeated LEADER_READY poll",
+            );
+        }
+    }
+
+    #[test]
+    fn slot_roll_clears_deferred_to_checked() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) =
+            setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue a retryable error that defers the TX.
+        bridge.queue_execute_response(
+            &exec_batch,
+            0,
+            bridge.execute_err(not_included_reasons::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT),
+        );
+
+        // Poll - TX moves to deferred.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert!(scheduler.deferred_tx.iter().any(|id| id.key == tx_key));
+        assert_eq!(scheduler.checked_tx.len(), 0);
+
+        // Roll to next slot.
+        bridge.queue_progress(ProgressMessage {
+            current_slot: MOCK_PROGRESS.current_slot + 1,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        // Deferred TX drained back to checked.
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+        assert!(
+            scheduler.checked_tx.iter().any(|id| id.key == tx_key),
+            "Deferred TX should move to checked_tx on slot roll",
+        );
+        assert!(bridge.contains_tx(tx_key));
+    }
+
+    #[test]
+    fn slot_roll_resets_recheck_cursor() {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Zero remaining CUs so TX stays in checked (no execution budget).
+        let leader_no_budget = ProgressMessage {
+            leader_state: LEADER_READY,
+            remaining_cost_units: 0,
+            ..MOCK_PROGRESS
+        };
+
+        // Ingest & check a TX.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, 25_000, 100);
+        bridge.queue_tpu(&tx);
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        bridge.queue_all_checks_ok();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.checked_tx.len(), 1);
+        let checked_meta = *scheduler.checked_tx.last().unwrap();
+
+        // Provide tip config.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // First leader poll - become_receiver fires, next_recheck set.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        while bridge.pop_schedule().is_some() {}
+
+        // Second leader poll - recheck is scheduled.
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        let recheck_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(recheck_batch.flags & 1, pack_message_flags::CHECK);
+        assert!(
+            recheck_batch
+                .transactions
+                .iter()
+                .any(|t| t.key == checked_meta.key),
+        );
+        bridge.queue_check_response(&recheck_batch, 0, None);
+
+        // Third leader poll - recheck response drained, cursor exhausted (only 1 TX).
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        assert!(scheduler.next_recheck.is_some()); // Re-initialized by poll.
+
+        // Exhaust remaining rechecks so cursor is fully consumed.
+        while let Some(batch) = bridge.pop_schedule() {
+            if batch.flags & 1 == pack_message_flags::CHECK {
+                for i in 0..batch.transactions.len() {
+                    bridge.queue_check_response(&batch, i, None);
+                }
+            }
+        }
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        // After exhausting all rechecks, cursor should be None.
+        while let Some(batch) = bridge.pop_schedule() {
+            if batch.flags & 1 == pack_message_flags::CHECK {
+                for i in 0..batch.transactions.len() {
+                    bridge.queue_check_response(&batch, i, None);
+                }
+            }
+        }
+        bridge.queue_progress(leader_no_budget);
+        scheduler.poll(&mut bridge);
+        while bridge.pop_schedule().is_some() {}
+
+        // Now roll to a new slot - cursor should reset.
+        let new_slot = MOCK_PROGRESS.current_slot + 1;
+        bridge.queue_progress(ProgressMessage {
+            leader_state: LEADER_READY,
+            current_slot: new_slot,
+            remaining_cost_units: 0,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+        while bridge.pop_schedule().is_some() {} // Drain any become_receiver batches.
+
+        // Poll again - recheck should be scheduled (cursor was reset by slot roll).
+        bridge.queue_progress(ProgressMessage {
+            leader_state: LEADER_READY,
+            current_slot: new_slot,
+            remaining_cost_units: 0,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        // Assert - a check batch containing our TX is scheduled (recheck restarted).
+        let mut found_recheck = false;
+        while let Some(batch) = bridge.pop_schedule() {
+            if batch.flags & 1 == pack_message_flags::CHECK
+                && batch
+                    .transactions
+                    .iter()
+                    .any(|t| t.key == checked_meta.key)
+            {
+                found_recheck = true;
+            }
+        }
+        assert!(found_recheck, "Recheck should restart after slot roll");
+        assert!(scheduler.checked_tx.contains(&checked_meta));
     }
 }
