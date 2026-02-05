@@ -81,7 +81,7 @@ where
         // SAFETY
         // - We own this allocation exclusively & len is accurate.
         let data = unsafe { TransactionPtr::from_raw_parts(data, len) };
-        let data = SanitizedTransactionView::try_new_sanitized(data, true).unwrap();
+        let data = SanitizedTransactionView::try_new_sanitized(data, true, true).unwrap();
 
         // Insert into state & store the key in the tpu queue.
         let key = self.state.insert(TransactionState {
@@ -240,7 +240,7 @@ where
         // SAFETY
         // - We own this allocation exclusively & len is accurate.
         let data = unsafe { TransactionPtr::from_raw_parts(data, len) };
-        let data = SanitizedTransactionView::try_new_sanitized(data, true)?;
+        let data = SanitizedTransactionView::try_new_sanitized(data, true, true)?;
 
         // Insert into state & return the key.
         let key = self.state.insert(TransactionState {
