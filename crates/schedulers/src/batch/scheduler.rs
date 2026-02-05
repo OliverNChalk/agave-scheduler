@@ -1385,6 +1385,107 @@ mod tests {
         .into()
     }
 
+    type SetupExecuting = (
+        BatchScheduler,
+        TestBridge<PriorityId>,
+        crossbeam_channel::Sender<JitoUpdate>,
+        ScheduleBatch<Vec<KeyedTransactionMeta<PriorityId>>>,
+    );
+
+    fn setup_executing_tx(cu_limit: u32, cu_price: u64) -> SetupExecuting {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Ingest a TX.
+        let payer = Keypair::new();
+        let tx = noop_with_budget(&payer, cu_limit, cu_price);
+        bridge.queue_tpu(&tx);
+
+        // Poll - ingest & schedule checks.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Complete checks.
+        bridge.queue_all_checks_ok();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.checked_tx.len(), 1);
+
+        // Provide tip config before becoming leader.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Transition to leader.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
+        let tip0 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip0.flags & pack_message_flags::EXECUTE, 0);
+        let tip1 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip1.flags & pack_message_flags::EXECUTE, 0);
+
+        // Pop the user TX execute batch.
+        let exec_batch = bridge.pop_schedule().unwrap();
+        assert_eq!(exec_batch.flags, pack_message_flags::EXECUTE);
+        assert_eq!(exec_batch.transactions.len(), 1);
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert!(
+            scheduler
+                .executing_tx
+                .contains(&exec_batch.transactions[0].key)
+        );
+
+        (scheduler, bridge, jito_tx, exec_batch)
+    }
+
+    fn setup_executing_bundle() -> SetupExecuting {
+        let (mut scheduler, jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Ingest a bundle.
+        let payer = Keypair::new();
+        let bundle_tx = noop_with_budget(&payer, 25_000, 100);
+        jito_tx
+            .send(JitoUpdate::Bundle(vec![serialize_tx(&bundle_tx)]))
+            .unwrap();
+
+        // Provide tip config before becoming leader.
+        jito_tx
+            .send(JitoUpdate::TipConfig(TipConfig {
+                tip_receiver: Pubkey::new_unique(),
+                block_builder: Pubkey::new_unique(),
+            }))
+            .unwrap();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.bundles.len(), 1);
+
+        // Transition to leader.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
+        let tip0 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip0.flags & pack_message_flags::EXECUTE, 0);
+        let tip1 = bridge.pop_schedule().unwrap();
+        assert_ne!(tip1.flags & pack_message_flags::EXECUTE, 0);
+
+        // Pop the bundle execute batch.
+        let exec_batch = bridge.pop_schedule().unwrap();
+        assert_ne!(exec_batch.flags & execution_flags::ALL_OR_NOTHING, 0);
+        assert_eq!(exec_batch.transactions.len(), 1);
+        assert_eq!(scheduler.bundles.len(), 0);
+
+        (scheduler, bridge, jito_tx, exec_batch)
+    }
+
     ////////////////////////
     // Misc
 
@@ -2459,5 +2560,187 @@ mod tests {
 
         // Bundle remains in scheduler (not consumed).
         assert_eq!(scheduler.bundles.len(), 1);
+    }
+
+    //////////////////////
+    // Execution responses
+
+    #[test]
+    fn execute_ok_drops_transaction() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue a successful execution response.
+        bridge.queue_execute_response(&exec_batch, 0, bridge.execute_ok());
+
+        // Poll to drain the response.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // TX dropped from bridge, removed from executing, not in checked or deferred.
+        assert!(!bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+    }
+
+    #[test]
+    fn execute_retryable_account_in_use_retries_same_slot() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue ACCOUNT_IN_USE response (retryable, same slot).
+        bridge.queue_execute_response(
+            &exec_batch,
+            0,
+            bridge.execute_err(not_included_reasons::ACCOUNT_IN_USE),
+        );
+
+        // Poll as NOT_LEADER so schedule_execute doesn't immediately re-schedule.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // TX goes back to checked (immediate retry), not deferred.
+        assert!(bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+        assert!(scheduler.checked_tx.iter().any(|id| id.key == tx_key));
+    }
+
+    #[test]
+    fn execute_retryable_other_defers_to_next_slot() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue WOULD_EXCEED_MAX_BLOCK_COST_LIMIT response (retryable, same slot).
+        bridge.queue_execute_response(
+            &exec_batch,
+            0,
+            bridge.execute_err(not_included_reasons::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT),
+        );
+
+        // Poll to drain the response.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // TX goes to deferred (not checked), will retry next slot.
+        assert!(bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert!(scheduler.deferred_tx.iter().any(|id| id.key == tx_key));
+    }
+
+    #[test]
+    fn deferred_tx_drained_on_slot_roll() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue a retryable error that defers the TX.
+        bridge.queue_execute_response(
+            &exec_batch,
+            0,
+            bridge.execute_err(not_included_reasons::WOULD_EXCEED_MAX_BLOCK_COST_LIMIT),
+        );
+
+        // Poll to drain the response - TX moves to deferred.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+        assert!(scheduler.deferred_tx.iter().any(|id| id.key == tx_key));
+
+        // Roll to the next slot.
+        bridge.queue_progress(ProgressMessage {
+            current_slot: MOCK_PROGRESS.current_slot + 1,
+            ..MOCK_PROGRESS
+        });
+        scheduler.poll(&mut bridge);
+
+        // Deferred TX drained back to checked.
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+        assert!(scheduler.checked_tx.iter().any(|id| id.key == tx_key));
+        assert!(bridge.contains_tx(tx_key));
+    }
+
+    #[test]
+    fn execute_non_retryable_drops_transaction() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue ALREADY_PROCESSED response (non-retryable).
+        bridge.queue_execute_response(
+            &exec_batch,
+            0,
+            bridge.execute_err(not_included_reasons::ALREADY_PROCESSED),
+        );
+
+        // Poll to drain the response.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // TX dropped entirely.
+        assert!(!bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+    }
+
+    #[test]
+    fn execute_err_bundle_always_drops() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_bundle();
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue a retryable error for the bundle TX.
+        bridge.queue_execute_response(
+            &exec_batch,
+            0,
+            bridge.execute_err(not_included_reasons::ACCOUNT_IN_USE),
+        );
+
+        // Poll to drain the response.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // Bundle TX is dropped regardless of retryability.
+        assert!(!bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+    }
+
+    #[test]
+    fn unprocessed_execute_returns_to_checked() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_tx(25_000, 100);
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue an unprocessed response.
+        bridge.queue_unprocessed_response(&exec_batch, 0);
+
+        // Poll as NOT_LEADER so schedule_execute doesn't immediately re-schedule.
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // TX returns to checked, not dropped.
+        assert!(bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert!(scheduler.checked_tx.iter().any(|id| id.key == tx_key));
+        assert_eq!(scheduler.deferred_tx.len(), 0);
+    }
+
+    #[test]
+    fn unprocessed_bundle_drops() {
+        let (mut scheduler, mut bridge, _jito_tx, exec_batch) = setup_executing_bundle();
+        let tx_key = exec_batch.transactions[0].key;
+
+        // Queue an unprocessed response for the bundle TX.
+        bridge.queue_unprocessed_response(&exec_batch, 0);
+
+        // Poll to drain the response.
+        bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
+        scheduler.poll(&mut bridge);
+
+        // Bundle TX is dropped (bundles are never retried).
+        assert!(!bridge.contains_tx(tx_key));
+        assert!(!scheduler.executing_tx.contains(&tx_key));
+        assert_eq!(scheduler.checked_tx.len(), 0);
+        assert_eq!(scheduler.deferred_tx.len(), 0);
     }
 }
