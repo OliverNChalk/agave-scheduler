@@ -84,6 +84,9 @@ impl ControlThread {
                             block_engine: batch.jito.block_engine,
                         },
                         keypair,
+                        unchecked_capacity: 64 * 1024,
+                        checked_capacity: 64 * 1024,
+                        bundle_capacity: 1024,
                     },
                 );
 

@@ -53,9 +53,6 @@ use crate::shared::PriorityId;
 const PRIORITY_MULTIPLIER: u64 = 1_000_000;
 const BUNDLE_MARKER: u64 = u64::MAX;
 
-const UNCHECKED_CAPACITY: usize = 64 * 1024;
-const CHECKED_CAPACITY: usize = 64 * 1024;
-const BUNDLE_CAPACITY: usize = 1024;
 
 const TX_REGION_SIZE: usize = std::mem::size_of::<SharableTransactionRegion>();
 const TX_BATCH_PER_MESSAGE: usize = TX_REGION_SIZE + std::mem::size_of::<PriorityId>();
@@ -75,6 +72,9 @@ pub struct BatchSchedulerArgs {
     pub tip: TipDistributionArgs,
     pub jito: JitoArgs,
     pub keypair: &'static Keypair,
+    pub unchecked_capacity: usize,
+    pub checked_capacity: usize,
+    pub bundle_capacity: usize,
 }
 
 pub struct BatchScheduler {
@@ -82,6 +82,10 @@ pub struct BatchScheduler {
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
     tip_distribution_config: TipDistributionArgs,
     keypair: &'static Keypair,
+
+    unchecked_capacity: usize,
+    checked_capacity: usize,
+    bundle_capacity: usize,
 
     builder_config: BuilderConfig,
     tip_config: Option<TipConfig>,
@@ -121,7 +125,14 @@ impl BatchScheduler {
     fn new_with_jito(
         shutdown: Shutdown,
         events: Option<EventEmitter>,
-        BatchSchedulerArgs { tip, jito: _, keypair }: BatchSchedulerArgs,
+        BatchSchedulerArgs {
+            tip,
+            jito: _,
+            keypair,
+            unchecked_capacity,
+            checked_capacity,
+            bundle_capacity,
+        }: BatchSchedulerArgs,
         jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
     ) -> Self {
         let JitoUpdate::BuilderConfig(builder_config) =
@@ -136,14 +147,18 @@ impl BatchScheduler {
             tip_distribution_config: tip,
             keypair,
 
+            unchecked_capacity,
+            checked_capacity,
+            bundle_capacity,
+
             builder_config,
             tip_config: None,
             recent_blockhash: Hash::default(),
             bundles: BTreeSet::new(),
-            unchecked_tx: MinMaxHeap::with_capacity(UNCHECKED_CAPACITY),
+            unchecked_tx: MinMaxHeap::with_capacity(unchecked_capacity),
             checked_tx: BTreeSet::new(),
-            executing_tx: HashSet::with_capacity(CHECKED_CAPACITY),
-            deferred_tx: IndexSet::with_capacity(CHECKED_CAPACITY),
+            executing_tx: HashSet::with_capacity(checked_capacity),
+            deferred_tx: IndexSet::with_capacity(checked_capacity),
             next_recheck: None,
             in_flight_cus: 0,
             in_flight_locks: HashMap::new(),
@@ -390,7 +405,7 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         let additional = std::cmp::min(bridge.tpu_len(), max_count);
-        let shortfall = (self.unchecked_tx.len() + additional).saturating_sub(UNCHECKED_CAPACITY);
+        let shortfall = (self.unchecked_tx.len() + additional).saturating_sub(self.unchecked_capacity);
 
         // NB: Technically we are evicting more than we need to because not all of
         // `additional` will parse correctly & thus have a priority.
@@ -475,7 +490,7 @@ impl BatchScheduler {
                 }
 
                 // Evict lowest if we're at capacity.
-                if self.unchecked_tx.len() == UNCHECKED_CAPACITY {
+                if self.unchecked_tx.len() == self.unchecked_capacity {
                     let id = self.unchecked_tx.pop_min().unwrap();
                     self.emit_tx_event(
                         bridge,
@@ -578,7 +593,7 @@ impl BatchScheduler {
         }
 
         // Evict lowest priority bundle if at capacity.
-        if self.bundles.len() == BUNDLE_CAPACITY {
+        if self.bundles.len() == self.bundle_capacity {
             let evicted = self.bundles.pop_first().unwrap();
             for key in evicted.keys {
                 bridge.tx_drop(key);
@@ -804,7 +819,7 @@ impl BatchScheduler {
         }
 
         // First check. Evict lowest priority if at capacity.
-        if self.pending_len() >= CHECKED_CAPACITY {
+        if self.pending_len() >= self.checked_capacity {
             let id = self.checked_tx.pop_first().unwrap();
             self.emit_tx_event(
                 bridge,
@@ -874,7 +889,7 @@ impl BatchScheduler {
         }
 
         // Evict from checked_tx if over capacity.
-        if self.pending_len() > CHECKED_CAPACITY
+        if self.pending_len() > self.checked_capacity
             && let Some(evicted) = self.checked_tx.pop_first()
         {
             self.emit_tx_event(
@@ -1366,6 +1381,9 @@ mod tests {
                 block_engine: String::new(),
             },
             keypair: Box::leak(Box::new(Keypair::new())),
+            unchecked_capacity: 64,
+            checked_capacity: 64,
+            bundle_capacity: 16,
         };
         let scheduler = BatchScheduler::new_with_jito(Shutdown::new(), None, args, jito_rx);
 
@@ -2939,5 +2957,98 @@ mod tests {
         }
         assert!(found_recheck, "Recheck should restart after slot roll");
         assert!(scheduler.checked_tx.contains(&checked_meta));
+    }
+
+    //////////////
+    // Edge cases
+
+    #[test]
+    fn tpu_recv_evicts_lowest_priority() {
+        let (mut scheduler, _jito_tx) = test_scheduler();
+        // Worker capacity 0 prevents schedule_checks from draining unchecked_tx.
+        let mut bridge = TestBridge::new(5, 0);
+
+        // Fill unchecked_tx to capacity (64) with TXs of increasing priority.
+        // Use large cu_price values to ensure distinct priorities (avoid integer
+        // truncation in fee calculation).
+        let payers: Vec<Keypair> = (0..64).map(|_| Keypair::new()).collect();
+        for (i, payer) in payers.iter().enumerate() {
+            let cu_price = ((i + 1) as u64) * 1_000;
+            let tx = noop_with_budget(payer, 25_000, cu_price);
+            bridge.queue_tpu(&tx);
+        }
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.unchecked_tx.len(), 64);
+
+        // Remember the lowest priority TX's key.
+        let lowest = *scheduler.unchecked_tx.peek_min().unwrap();
+
+        // Ingest one more TX with higher priority than the lowest.
+        let new_payer = Keypair::new();
+        let new_tx = noop_with_budget(&new_payer, 25_000, 100_000);
+        bridge.queue_tpu(&new_tx);
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Assert - still at capacity (the lowest was evicted, new one added).
+        assert_eq!(scheduler.unchecked_tx.len(), 64);
+
+        // Assert - the old lowest priority TX was dropped from the bridge.
+        assert!(!bridge.contains_tx(lowest.key));
+
+        // Assert - new minimum has higher priority than the evicted TX.
+        let new_min = scheduler.unchecked_tx.peek_min().unwrap();
+        assert!(new_min.priority > lowest.priority);
+    }
+
+    #[test]
+    fn checked_capacity_eviction() {
+        let (mut scheduler, _jito_tx) = test_scheduler();
+        let mut bridge = TestBridge::new(5, 4);
+
+        // Fill checked_tx to capacity (64) by ingesting and checking 64 TXs.
+        // Use large cu_price values to ensure distinct priorities.
+        let payers: Vec<Keypair> = (0..64).map(|_| Keypair::new()).collect();
+        for (i, payer) in payers.iter().enumerate() {
+            let cu_price = ((i + 1) as u64) * 1_000;
+            let tx = noop_with_budget(payer, 25_000, cu_price);
+            bridge.queue_tpu(&tx);
+        }
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Complete all checks.
+        bridge.queue_all_checks_ok();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+        assert_eq!(scheduler.checked_tx.len(), 64);
+        assert_eq!(scheduler.unchecked_tx.len(), 0);
+
+        // Remember the lowest priority checked TX.
+        let lowest = *scheduler.checked_tx.first().unwrap();
+
+        // Ingest one more TX and complete its check → should evict lowest checked.
+        let new_payer = Keypair::new();
+        let new_tx = noop_with_budget(&new_payer, 25_000, 100_000);
+        bridge.queue_tpu(&new_tx);
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Complete the new TX's check.
+        bridge.queue_all_checks_ok();
+        bridge.queue_progress(MOCK_PROGRESS);
+        scheduler.poll(&mut bridge);
+
+        // Assert - checked_tx is still at capacity (lowest was evicted, new one inserted).
+        assert_eq!(scheduler.checked_tx.len(), 64);
+
+        // Assert - the old lowest priority TX was evicted and dropped from bridge.
+        assert!(!scheduler.checked_tx.contains(&lowest));
+        assert!(!bridge.contains_tx(lowest.key));
+
+        // Assert - new minimum has higher priority than the evicted TX.
+        let new_min = scheduler.checked_tx.first().unwrap();
+        assert!(new_min.priority > lowest.priority);
     }
 }
