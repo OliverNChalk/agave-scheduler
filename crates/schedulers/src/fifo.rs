@@ -37,30 +37,38 @@ impl FifoScheduler {
         let _ = bridge.drain_progress();
 
         // Drain check responses.
-        while bridge.pop_worker(CHECK_WORKER, |_, WorkerResponse { key, response, .. }| {
-            let WorkerAction::Check(rep, _) = response else {
-                panic!();
-            };
+        bridge.worker_drain(
+            CHECK_WORKER,
+            |_, WorkerResponse { key, response, .. }| {
+                let WorkerAction::Check(rep, _) = response else {
+                    panic!();
+                };
 
-            // TODO: Dedupe with greedy & make this friendlier.
-            let parsing_failed =
-                rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
-            let status_failed = rep.status_check_flags
-                & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
-                != 0;
+                // TODO: Dedupe with greedy & make this friendlier.
+                let parsing_failed =
+                    rep.parsing_and_sanitization_flags == parsing_and_sanitization_flags::FAILED;
+                let status_failed = rep.status_check_flags
+                    & !(status_check_flags::REQUESTED | status_check_flags::PERFORMED)
+                    != 0;
 
-            match parsing_failed || status_failed {
-                true => TxDecision::Drop,
-                false => {
-                    self.execute_queue.push_back(key);
+                match parsing_failed || status_failed {
+                    true => TxDecision::Drop,
+                    false => {
+                        self.execute_queue.push_back(key);
 
-                    TxDecision::Keep
+                        TxDecision::Keep
+                    }
                 }
-            }
-        }) {}
+            },
+            usize::MAX,
+        );
 
         // Drain execute responses.
-        while bridge.pop_worker(EXECUTE_WORKER, |_, WorkerResponse { .. }| TxDecision::Drop) {}
+        bridge.worker_drain(
+            EXECUTE_WORKER,
+            |_, WorkerResponse { .. }| TxDecision::Drop,
+            usize::MAX,
+        );
 
         // Ingest a bounded amount of new transactions.
         let max_count = match bridge.progress().leader_state == LEADER_READY {

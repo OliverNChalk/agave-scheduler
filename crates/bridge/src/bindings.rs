@@ -1,12 +1,11 @@
-use std::cmp::Ordering;
 use std::ptr::NonNull;
 
 use agave_feature_set::FeatureSet;
 use agave_scheduler_bindings::worker_message_types::{CheckResponse, ExecutionResponse};
 use agave_scheduler_bindings::{
     MAX_TRANSACTIONS_PER_MESSAGE, PackToWorkerMessage, ProgressMessage,
-    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage, processed_codes,
-    worker_message_types,
+    SharableTransactionBatchRegion, SharableTransactionRegion, TpuToPackMessage,
+    WorkerToPackMessage, processed_codes, worker_message_types,
 };
 use agave_scheduling_utils::handshake::client::{ClientSession, ClientWorkerSession};
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
@@ -33,9 +32,10 @@ pub struct SchedulerBindings<M> {
     progress: ProgressMessage,
     runtime: RuntimeState,
     state: SlotMap<TransactionKey, TransactionState>,
-    worker_response: Option<WorkerResponsePointers<M>>,
 
     metrics: SchedulerBindingsMetrics,
+
+    _marker: core::marker::PhantomData<M>,
 }
 
 type Batch<'a, M> = TransactionPtrBatch<'a, KeyedTransactionMeta<M>>;
@@ -75,9 +75,9 @@ where
                 burn_percent: 50,
             },
             state: SlotMap::default(),
-            worker_response: None,
 
             metrics: SchedulerBindingsMetrics::new(),
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -316,79 +316,121 @@ where
         self.tpu_to_pack.finalize();
     }
 
-    fn pop_worker(
+    fn worker_drain(
         &mut self,
         worker: usize,
         mut cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
-    ) -> bool {
-        let ptrs = match &mut self.worker_response {
-            Some(in_progress) => in_progress,
-            None => {
-                self.workers[worker].0.worker_to_pack.sync();
-                let Some(rep) = self.workers[worker].0.worker_to_pack.try_read().copied() else {
-                    return false;
-                };
-                self.workers[worker].0.worker_to_pack.finalize();
+        max_count: usize,
+    ) {
+        self.workers[worker].0.worker_to_pack.sync();
+        for _ in 0..max_count {
+            let Some(rep) = self.workers[worker].0.worker_to_pack.try_read().copied() else {
+                break;
+            };
+            self.handle_worker_response(rep, &mut cb);
+        }
+        self.workers[worker].0.worker_to_pack.finalize();
+    }
 
-                // Get transaction & meta pointers.
-                let transactions = unsafe {
+    fn schedule(
+        &mut self,
+        ScheduleBatch { worker, transactions: batch, max_working_slot, flags }: ScheduleBatch<
+            &[KeyedTransactionMeta<M>],
+        >,
+    ) {
+        let queue = &mut self.workers[worker].0.pack_to_worker;
+
+        queue.sync();
+        queue
+            .try_write(PackToWorkerMessage {
+                flags,
+                max_working_slot,
+                batch: Self::collect_batch(&self.allocator, &mut self.state, batch),
+            })
+            .unwrap();
+        queue.commit();
+    }
+}
+
+impl<M> SchedulerBindings<M>
+where
+    M: Copy,
+{
+    fn handle_worker_response(
+        &mut self,
+        rep: WorkerToPackMessage,
+        cb: &mut impl FnMut(&mut Self, WorkerResponse<'_, M>) -> TxDecision,
+    ) {
+        // Get transaction & meta pointers.
+        let transactions = unsafe {
+            self.allocator
+                .ptr_from_offset(rep.batch.transactions_offset)
+                .cast::<SharableTransactionRegion>()
+        };
+        // SAFETY:
+        // - We ensured that this batch was originally allocated to support M.
+        let metas = unsafe { transactions.byte_add(Batch::<M>::TX_META_START).cast() };
+
+        let responses = match (rep.processed_code, rep.responses.tag) {
+            (processed_codes::PROCESSED, worker_message_types::EXECUTION_RESPONSE) => {
+                assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
+                WorkerResponseBatch::Execution(unsafe {
                     self.allocator
-                        .ptr_from_offset(rep.batch.transactions_offset)
-                        .cast::<SharableTransactionRegion>()
-                };
-                // SAFETY:
-                // - We ensured that this batch was originally allocated to support M.
-                let metas = unsafe { transactions.byte_add(Self::TX_BATCH_META_OFFSET).cast() };
-
-                let responses = match (rep.processed_code, rep.responses.tag) {
-                    (processed_codes::PROCESSED, worker_message_types::EXECUTION_RESPONSE) => {
-                        assert_eq!(
-                            rep.batch.num_transactions,
-                            rep.responses.num_transaction_responses
-                        );
-                        WorkerResponseBatch::Execution(unsafe {
-                            self.allocator
-                                .ptr_from_offset(rep.responses.transaction_responses_offset)
-                                .cast()
-                        })
-                    }
-                    (processed_codes::PROCESSED, worker_message_types::CHECK_RESPONSE) => {
-                        assert_eq!(
-                            rep.batch.num_transactions,
-                            rep.responses.num_transaction_responses
-                        );
-                        WorkerResponseBatch::Check(unsafe {
-                            self.allocator
-                                .ptr_from_offset(rep.responses.transaction_responses_offset)
-                                .cast()
-                        })
-                    }
-                    (processed_codes::MAX_WORKING_SLOT_EXCEEDED, _) => {
-                        WorkerResponseBatch::Unprocessed
-                    }
-                    _ => panic!("Unexpected response; rep={rep:?}"),
-                };
-
-                self.worker_response.insert(WorkerResponsePointers {
-                    index: 0,
-                    len: usize::from(rep.batch.num_transactions),
-                    batch_offset: rep.batch.transactions_offset,
-                    metas,
-                    responses,
+                        .ptr_from_offset(rep.responses.transaction_responses_offset)
+                        .cast()
                 })
             }
+            (processed_codes::PROCESSED, worker_message_types::CHECK_RESPONSE) => {
+                assert_eq!(rep.batch.num_transactions, rep.responses.num_transaction_responses);
+                WorkerResponseBatch::Check(unsafe {
+                    self.allocator
+                        .ptr_from_offset(rep.responses.transaction_responses_offset)
+                        .cast()
+                })
+            }
+            (processed_codes::MAX_WORKING_SLOT_EXCEEDED, _) => WorkerResponseBatch::Unprocessed,
+            _ => panic!("Unexpected response; rep={rep:?}"),
         };
 
-        // SAFETY
-        // - We took care to allocate these correctly originally.
-        let KeyedTransactionMeta { key, meta } = unsafe { ptrs.metas.add(ptrs.index).read() };
+        for index in 0..usize::from(rep.batch.num_transactions) {
+            // SAFETY
+            // - We took care to allocate these correctly originally.
+            let KeyedTransactionMeta::<M> { key, meta } = unsafe { metas.add(index).read() };
+            let decision = self.handle_transaction_response(key, meta, index, &responses, cb);
 
+            // Remove the tx from state & drop the allocation if requested.
+            if decision == TxDecision::Drop {
+                self.tx_drop(key);
+            }
+        }
+
+        // SAFETY:
+        // - It is our responsibility to free the response pointers. The transaction
+        //   lifetimes we are already managing separately via Keep/Drop.
+        unsafe {
+            self.allocator.free_offset(rep.batch.transactions_offset);
+            match responses {
+                WorkerResponseBatch::Unprocessed => {}
+                WorkerResponseBatch::Execution(ptr) => self.allocator.free(ptr.cast()),
+                WorkerResponseBatch::Check(ptr) => self.allocator.free(ptr.cast()),
+            }
+        }
+    }
+
+    fn handle_transaction_response(
+        &mut self,
+        key: TransactionKey,
+        meta: M,
+        index: usize,
+        responses: &WorkerResponseBatch,
+        cb: &mut impl FnMut(&mut Self, WorkerResponse<'_, M>) -> TxDecision,
+    ) -> TxDecision {
         // Decrease the borrow counter as Agave has returned ownership to us.
         let state = &mut self.state[key];
         state.borrows -= 1;
 
         // Only callback if this state is not already dead (scheduler requested drop).
-        let decision = match (state.dead, &ptrs.responses) {
+        match (state.dead, responses) {
             (true, _) => TxDecision::Drop,
             (false, WorkerResponseBatch::Unprocessed) => {
                 let rep = WorkerResponse { key, meta, response: WorkerAction::Unprocessed };
@@ -398,7 +440,7 @@ where
             (false, WorkerResponseBatch::Execution(rep)) => {
                 // SAFETY
                 // - We trust Agave to have correctly allocated the responses.
-                let rep = unsafe { rep.add(ptrs.index).read() };
+                let rep = unsafe { rep.add(index).read() };
                 let rep = WorkerResponse { key, meta, response: WorkerAction::Execute(rep) };
 
                 cb(self, rep)
@@ -406,7 +448,7 @@ where
             (false, WorkerResponseBatch::Check(rep)) => {
                 // SAFETY
                 // - We trust Agave to have correctly allocated the responses.
-                let rep = unsafe { rep.add(ptrs.index).read() };
+                let rep = unsafe { rep.add(index).read() };
 
                 // Load shared pubkeys if there are any.
                 let keys = (rep.resolved_pubkeys.num_pubkeys > 0).then(|| unsafe {
@@ -434,56 +476,7 @@ where
 
                 decision
             }
-        };
-
-        // Remove the tx from state & drop the allocation if requested.
-        if decision == TxDecision::Drop {
-            self.tx_drop(key);
         }
-
-        // Increment the index & clear if we have exhausted all responses.
-        let ptrs = self.worker_response.as_mut().unwrap();
-        ptrs.index += 1;
-        match ptrs.index.cmp(&ptrs.len) {
-            Ordering::Greater => unreachable!(),
-            Ordering::Equal => {
-                let ptrs = self.worker_response.take().unwrap();
-
-                // SAFETY:
-                // - It is our responsibility to free the response pointers. The transaction
-                //   lifetimes we are already managing separately via Keep/Drop.
-                unsafe {
-                    self.allocator.free_offset(ptrs.batch_offset);
-                    match ptrs.responses {
-                        WorkerResponseBatch::Unprocessed => {}
-                        WorkerResponseBatch::Check(ptr) => self.allocator.free(ptr.cast()),
-                        WorkerResponseBatch::Execution(ptr) => self.allocator.free(ptr.cast()),
-                    }
-                }
-            }
-            Ordering::Less => {}
-        }
-
-        true
-    }
-
-    fn schedule(
-        &mut self,
-        ScheduleBatch { worker, transactions: batch, max_working_slot, flags }: ScheduleBatch<
-            &[KeyedTransactionMeta<M>],
-        >,
-    ) {
-        let queue = &mut self.workers[worker].0.pack_to_worker;
-
-        queue.sync();
-        queue
-            .try_write(PackToWorkerMessage {
-                flags,
-                max_working_slot,
-                batch: Self::collect_batch(&self.allocator, &mut self.state, batch),
-            })
-            .unwrap();
-        queue.commit();
     }
 }
 
@@ -511,14 +504,6 @@ impl Worker for SchedulerWorker {
 
         self.0.pack_to_worker.capacity() - self.0.pack_to_worker.len()
     }
-}
-
-struct WorkerResponsePointers<M> {
-    index: usize,
-    len: usize,
-    batch_offset: usize,
-    metas: NonNull<KeyedTransactionMeta<M>>,
-    responses: WorkerResponseBatch,
 }
 
 enum WorkerResponseBatch {

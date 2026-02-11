@@ -145,8 +145,9 @@ impl GreedyScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         for worker in 0..5 {
-            while bridge.pop_worker(worker, |bridge, WorkerResponse { meta, response, .. }| {
-                match response {
+            bridge.worker_drain(
+                worker,
+                |bridge, WorkerResponse { meta, response, .. }| match response {
                     WorkerAction::Unprocessed => {
                         self.slot_event.worker_unprocessed += 1;
                         self.checked.push(meta);
@@ -155,8 +156,9 @@ impl GreedyScheduler {
                     }
                     WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
                     WorkerAction::Execute(rep) => self.on_execute(meta, rep),
-                }
-            }) {}
+                },
+                usize::MAX,
+            );
         }
     }
 

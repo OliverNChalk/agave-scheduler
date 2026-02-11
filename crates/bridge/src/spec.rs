@@ -36,11 +36,12 @@ pub trait Bridge {
         max_count: usize,
     );
 
-    fn pop_worker(
+    fn worker_drain(
         &mut self,
         worker: usize,
         cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
-    ) -> bool;
+        max_count: usize,
+    );
 
     fn schedule(&mut self, batch: ScheduleBatch<&[KeyedTransactionMeta<Self::Meta>]>);
 }

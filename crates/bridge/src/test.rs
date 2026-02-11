@@ -303,49 +303,38 @@ where
         }
     }
 
-    fn pop_worker(
+    fn worker_drain(
         &mut self,
         worker: usize,
         mut cb: impl FnMut(&mut Self, WorkerResponse<'_, Self::Meta>) -> TxDecision,
-    ) -> bool {
-        let Some((KeyedTransactionMeta { key, meta }, rep)) =
-            self.worker_queues[worker].pop_front()
-        else {
-            return false;
-        };
+        max_count: usize,
+    ) {
+        for _ in 0..max_count {
+            let Some((KeyedTransactionMeta { key, meta }, rep)) =
+                self.worker_queues[worker].pop_front()
+            else {
+                return;
+            };
 
-        // Temporarily take keys to avoid mutable aliasing self.
-        let keys = self.state[key].keys.take();
-        let response = match rep {
-            WorkerActionLite::Unprocessed => WorkerAction::Unprocessed,
-            WorkerActionLite::Check(rep) => WorkerAction::Check(rep, keys.as_ref()),
-            WorkerActionLite::Execute(rep) => WorkerAction::Execute(rep),
-        };
+            // Temporarily take keys to avoid mutable aliasing self.
+            let keys = self.state[key].keys.take();
+            let response = match rep {
+                WorkerActionLite::Unprocessed => WorkerAction::Unprocessed,
+                WorkerActionLite::Check(rep) => WorkerAction::Check(rep, keys.as_ref()),
+                WorkerActionLite::Execute(rep) => WorkerAction::Execute(rep),
+            };
 
-        match cb(self, WorkerResponse { key, meta, response }) {
-            // Restore keys.
-            TxDecision::Keep => self.state[key].keys = keys,
-            TxDecision::Drop => {
-                let state = self.state.remove(key).unwrap();
+            match cb(self, WorkerResponse { key, meta, response }) {
+                // Restore keys.
+                TxDecision::Keep => self.state[key].keys = keys,
+                TxDecision::Drop => {
+                    let state = self.state.remove(key).unwrap();
 
-                // Drop the underlying transaction allocation.
-                let data = state.data.inner_data().data();
-                let len = data.len();
-                let ptr = data.as_ptr();
-                drop(state);
-                // SAFETY
-                // - We original allocated this and exclusively own it, so it's safe for us to
-                //   deallocate.
-                unsafe {
-                    let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
-                    core::ptr::drop_in_place(allocation);
-                }
-
-                // Drop the underlying pubkeys allocation.
-                if let Some(keys) = keys {
-                    let slice = keys.as_slice();
-                    let len = slice.len();
-                    let ptr = slice.as_ptr();
+                    // Drop the underlying transaction allocation.
+                    let data = state.data.inner_data().data();
+                    let len = data.len();
+                    let ptr = data.as_ptr();
+                    drop(state);
                     // SAFETY
                     // - We original allocated this and exclusively own it, so it's safe for us to
                     //   deallocate.
@@ -353,11 +342,23 @@ where
                         let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
                         core::ptr::drop_in_place(allocation);
                     }
+
+                    // Drop the underlying pubkeys allocation.
+                    if let Some(keys) = keys {
+                        let slice = keys.as_slice();
+                        let len = slice.len();
+                        let ptr = slice.as_ptr();
+                        // SAFETY
+                        // - We original allocated this and exclusively own it, so it's safe for us
+                        //   to deallocate.
+                        unsafe {
+                            let allocation = core::slice::from_raw_parts_mut(ptr.cast_mut(), len);
+                            core::ptr::drop_in_place(allocation);
+                        }
+                    }
                 }
             }
         }
-
-        true
     }
 
     fn schedule(

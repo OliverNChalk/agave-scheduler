@@ -367,35 +367,40 @@ impl BatchScheduler {
         B: Bridge<Meta = PriorityId>,
     {
         for worker in 0..5 {
-            while bridge.pop_worker(worker, |bridge, WorkerResponse { meta, response, .. }| {
-                match response {
-                    WorkerAction::Unprocessed => {
-                        // Release locks if this was an execute request.
-                        if self.executing_tx.remove(&meta.key) {
-                            Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
-                            self.in_flight_cus -= meta.cost;
+            bridge.worker_drain(
+                worker,
+                |bridge, WorkerResponse { meta, response, .. }| {
+                    match response {
+                        WorkerAction::Unprocessed => {
+                            // Release locks if this was an execute request.
+                            if self.executing_tx.remove(&meta.key) {
+                                Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
+                                self.in_flight_cus -= meta.cost;
 
-                            // TODO: What is the most appropriate event for a bundle unprocessed.
-                            if meta.priority == BUNDLE_MARKER {
-                                return TxDecision::Drop;
+                                // TODO: What is the most appropriate event for a bundle
+                                // unprocessed.
+                                if meta.priority == BUNDLE_MARKER {
+                                    return TxDecision::Drop;
+                                }
+
+                                self.emit_tx_event(
+                                    bridge,
+                                    meta.key,
+                                    meta.priority,
+                                    TransactionAction::ExecuteUnprocessed,
+                                );
+                                self.metrics.execute_unprocessed.increment(1);
+                                self.checked_tx.insert(meta);
                             }
 
-                            self.emit_tx_event(
-                                bridge,
-                                meta.key,
-                                meta.priority,
-                                TransactionAction::ExecuteUnprocessed,
-                            );
-                            self.metrics.execute_unprocessed.increment(1);
-                            self.checked_tx.insert(meta);
+                            TxDecision::Keep
                         }
-
-                        TxDecision::Keep
+                        WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
+                        WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
                     }
-                    WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
-                    WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
-                }
-            }) {}
+                },
+                usize::MAX,
+            );
         }
     }
 
