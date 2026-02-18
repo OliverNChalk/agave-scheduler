@@ -101,11 +101,11 @@ impl ControlThread {
                 args.bindings_ipc,
                 FifoScheduler::new(),
             )),
-            SchedulerConfig::Greedy => {
+            SchedulerConfig::Greedy(greedy) => {
                 threads.push(crate::scheduler_thread::spawn::<GreedyScheduler>(
                     shutdown.clone(),
                     args.bindings_ipc,
-                    GreedyScheduler::new(Some(events)),
+                    GreedyScheduler::new(Some(events), greedy),
                 ));
             }
         }

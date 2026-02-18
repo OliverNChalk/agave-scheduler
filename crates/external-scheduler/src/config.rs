@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::path::PathBuf;
 
+use agave_schedulers::greedy::GreedyArgs;
 use serde::Deserialize;
 use serde_with::serde_as;
 use solana_pubkey::Pubkey;
@@ -16,7 +17,7 @@ pub(crate) struct Config {
 pub(crate) enum SchedulerConfig {
     Batch(BatchSchedulerConfig),
     Fifo,
-    Greedy,
+    Greedy(GreedyArgs),
 }
 
 #[derive(Debug, Deserialize)]
