@@ -91,6 +91,7 @@ name = "agave-external-scheduler"
 version = "0.1.0"
 dependencies = [
  "agave-bridge",
+ "agave-scheduler-fifo",
  "agave-schedulers",
  "agave-scheduling-utils",
  "clap",
@@ -139,6 +140,14 @@ dependencies = [
 name = "agave-scheduler-bindings"
 version = "4.0.0-alpha.0"
 source = "git+https://github.com/OliverNChalk/agave#4887e4e04138bc580ac8d795a9a467b67279e862"
+
+[[package]]
+name = "agave-scheduler-fifo"
+version = "0.1.0"
+dependencies = [
+ "agave-bridge",
+ "agave-scheduler-bindings",
+]
 
 [[package]]
 name = "agave-schedulers"

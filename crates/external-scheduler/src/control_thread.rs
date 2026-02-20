@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use agave_scheduler_fifo::FifoScheduler;
 use agave_schedulers::batch;
 use agave_schedulers::events::{EventContext, EventEmitter};
-use agave_schedulers::fifo::FifoScheduler;
 use agave_schedulers::greedy::{GreedyArgs, GreedyScheduler};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
