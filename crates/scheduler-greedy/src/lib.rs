@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate static_assertions;
+
 use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::time::{Duration, Instant};
@@ -14,6 +17,11 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{
     LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, SharableTransactionRegion, pack_message_flags,
 };
+use agave_schedulers::events::{
+    CheckFailure, Event, EventEmitter, EvictReason, SlotStatsEvent, TransactionAction,
+    TransactionEvent, TransactionSource,
+};
+use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use hashbrown::hash_map::EntryRef;
@@ -31,12 +39,6 @@ use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
 use solana_transaction::sanitized::MessageHash;
-
-use crate::events::{
-    CheckFailure, Event, EventEmitter, EvictReason, SlotStatsEvent, TransactionAction,
-    TransactionEvent, TransactionSource,
-};
-use crate::shared::PriorityId;
 
 const PRIORITY_MULTIPLIER: u64 = 1_000_000;
 const BUNDLE_MARKER: u64 = u64::MAX;

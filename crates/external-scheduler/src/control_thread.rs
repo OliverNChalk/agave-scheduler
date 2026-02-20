@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use agave_scheduler_fifo::FifoScheduler;
+use agave_scheduler_greedy::{GreedyArgs, GreedyScheduler};
 use agave_schedulers::batch;
 use agave_schedulers::events::{EventContext, EventEmitter};
-use agave_schedulers::greedy::{GreedyArgs, GreedyScheduler};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use solana_keypair::{EncodableKey, Keypair};

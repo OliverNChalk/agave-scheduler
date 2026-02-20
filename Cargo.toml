@@ -56,6 +56,7 @@ agave-bridge.path = "./crates/bridge"
 agave-feature-set = { git = "https://github.com/OliverNChalk/agave" }
 agave-scheduler-bindings = { git = "https://github.com/OliverNChalk/agave" }
 agave-scheduler-fifo.path = "./crates/scheduler-fifo"
+agave-scheduler-greedy.path = "./crates/scheduler-greedy"
 agave-schedulers.path = "./crates/schedulers"
 agave-scheduling-utils = { git = "https://github.com/OliverNChalk/agave" }
 agave-transaction-view = { git = "https://github.com/OliverNChalk/agave" }

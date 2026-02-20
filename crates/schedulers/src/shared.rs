@@ -3,9 +3,9 @@ use agave_bridge::TransactionKey;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct PriorityId {
-    pub(crate) priority: u64,
-    pub(crate) cost: u64,
-    pub(crate) key: TransactionKey,
+    pub priority: u64,
+    pub cost: u64,
+    pub key: TransactionKey,
 }
 
 impl PartialOrd for PriorityId {

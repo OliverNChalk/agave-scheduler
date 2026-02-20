@@ -92,6 +92,7 @@ version = "0.1.0"
 dependencies = [
  "agave-bridge",
  "agave-scheduler-fifo",
+ "agave-scheduler-greedy",
  "agave-schedulers",
  "agave-scheduling-utils",
  "clap",
@@ -147,6 +148,56 @@ version = "0.1.0"
 dependencies = [
  "agave-bridge",
  "agave-scheduler-bindings",
+]
+
+[[package]]
+name = "agave-scheduler-greedy"
+version = "0.1.0"
+dependencies = [
+ "agave-bridge",
+ "agave-scheduler-bindings",
+ "agave-schedulers",
+ "agave-scheduling-utils",
+ "agave-transaction-view",
+ "arrayref",
+ "bincode",
+ "borsh",
+ "chrono",
+ "crossbeam-channel",
+ "eyre",
+ "futures",
+ "hashbrown 0.16.1",
+ "indexmap 2.13.0",
+ "jito-protos",
+ "metrics",
+ "min-max-heap",
+ "serde",
+ "serde_with",
+ "solana-clock",
+ "solana-compute-budget-instruction",
+ "solana-compute-budget-interface",
+ "solana-cost-model",
+ "solana-fee",
+ "solana-fee-structure",
+ "solana-hash 3.1.0",
+ "solana-keypair",
+ "solana-message",
+ "solana-packet 3.0.0",
+ "solana-pubkey 3.0.0",
+ "solana-pubsub-client",
+ "solana-rpc-client",
+ "solana-rpc-client-types",
+ "solana-runtime-transaction",
+ "solana-sdk-ids",
+ "solana-signature",
+ "solana-svm-transaction",
+ "solana-transaction",
+ "static_assertions",
+ "strum",
+ "tokio",
+ "tonic",
+ "toolbox",
+ "tracing",
 ]
 
 [[package]]
