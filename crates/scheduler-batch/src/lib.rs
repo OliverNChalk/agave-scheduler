@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate static_assertions;
+
 mod jito_thread;
 mod scheduler;
 mod tip_program;

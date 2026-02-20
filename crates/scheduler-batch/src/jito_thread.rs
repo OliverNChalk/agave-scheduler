@@ -27,7 +27,7 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::IntervalStream;
 use tracing::{error, info};
 
-use crate::batch::tip_program::TIP_PAYMENT_CONFIG;
+use crate::tip_program::TIP_PAYMENT_CONFIG;
 
 #[derive(Debug, Clone)]
 pub struct JitoArgs {

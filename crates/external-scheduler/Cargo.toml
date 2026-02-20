@@ -10,9 +10,10 @@ workspace = true
 
 [dependencies]
 agave-bridge.workspace = true
+agave-scheduler-batch.workspace = true
 agave-scheduler-fifo.workspace = true
 agave-scheduler-greedy.workspace = true
-agave-schedulers = { workspace = true, features = ["batch"] }
+agave-schedulers.workspace = true
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }

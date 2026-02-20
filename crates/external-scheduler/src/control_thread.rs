@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use agave_scheduler_batch::{BatchScheduler, BatchSchedulerArgs, JitoArgs, TipDistributionArgs};
 use agave_scheduler_fifo::FifoScheduler;
 use agave_scheduler_greedy::{GreedyArgs, GreedyScheduler};
-use agave_schedulers::batch;
 use agave_schedulers::events::{EventContext, EventEmitter};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -68,16 +68,16 @@ impl ControlThread {
             SchedulerConfig::Batch(batch) => {
                 let keypair =
                     Box::leak(Box::new(Keypair::read_from_file(batch.keypair_path).unwrap()));
-                let (scheduler, jito_thread) = batch::BatchScheduler::new(
+                let (scheduler, jito_thread) = BatchScheduler::new(
                     shutdown.clone(),
                     Some(events),
-                    batch::BatchSchedulerArgs {
-                        tip: batch::TipDistributionArgs {
+                    BatchSchedulerArgs {
+                        tip: TipDistributionArgs {
                             vote_account: batch.tip.vote_account,
                             merkle_authority: batch.tip.merkle_authority,
                             commission_bps: batch.tip.commission_bps,
                         },
-                        jito: batch::JitoArgs {
+                        jito: JitoArgs {
                             http_rpc: batch.jito.http_rpc,
                             ws_rpc: batch.jito.ws_rpc,
                             block_engine: batch.jito.block_engine,
