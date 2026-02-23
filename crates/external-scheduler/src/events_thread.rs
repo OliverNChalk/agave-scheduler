@@ -6,7 +6,7 @@ pub(crate) struct EventsThread {
     event_rx: mpsc::Receiver<StampedEvent>,
 
     client: &'static Client,
-    subject_base: &'static str,
+    subject_base: String,
 }
 
 impl EventsThread {
@@ -15,7 +15,7 @@ impl EventsThread {
         client: &'static Client,
         host_name: &str,
     ) -> std::thread::JoinHandle<()> {
-        let subject_base = format!("event.scheduler.{host_name}").leak();
+        let subject_base = format!("event.scheduler.{host_name}");
 
         std::thread::Builder::new()
             .name("Events".to_string())
