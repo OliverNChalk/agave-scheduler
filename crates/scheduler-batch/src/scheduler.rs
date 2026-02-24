@@ -70,7 +70,7 @@ const BUNDLE_EXPIRY: Duration = Duration::from_millis(200);
 pub struct BatchSchedulerArgs {
     pub tip: TipDistributionArgs,
     pub jito: JitoArgs,
-    pub keypair: &'static Keypair,
+    pub keypair: Arc<Keypair>,
     pub unchecked_capacity: usize,
     pub checked_capacity: usize,
     pub bundle_capacity: usize,
@@ -80,7 +80,7 @@ pub struct BatchScheduler {
     shutdown: Shutdown,
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
     tip_distribution_config: TipDistributionArgs,
-    keypair: &'static Keypair,
+    keypair: Arc<Keypair>,
 
     unchecked_capacity: usize,
     checked_capacity: usize,
@@ -115,7 +115,7 @@ impl BatchScheduler {
     ) -> (Self, JoinHandle<()>) {
         let (jito_tx, jito_rx) = crossbeam_channel::bounded(1024);
         let jito_thread =
-            JitoThread::spawn(shutdown.clone(), jito_tx, args.jito.clone(), args.keypair);
+            JitoThread::spawn(shutdown.clone(), jito_tx, args.jito.clone(), args.keypair.clone());
 
         (Self::new_with_jito(shutdown, events, args, jito_rx), jito_thread)
     }
@@ -301,7 +301,7 @@ impl BatchScheduler {
         info!("Becoming tip receiver");
 
         let (tip_distribution_key, init_tip_distribution) = init_tip_distribution(
-            self.keypair,
+            &self.keypair,
             self.tip_distribution_config,
             self.slot / DEFAULT_SLOTS_PER_EPOCH,
             self.recent_blockhash,
@@ -310,7 +310,7 @@ impl BatchScheduler {
 
         let tip_config = self.tip_config.as_ref().unwrap();
         let change_tip_receiver = change_tip_receiver(
-            self.keypair,
+            &self.keypair,
             ChangeTipReceiverArgs {
                 old_tip_receiver: tip_config.tip_receiver,
                 new_tip_receiver: tip_distribution_key,
@@ -1385,7 +1385,7 @@ mod tests {
                 ws_rpc: String::new(),
                 block_engine: String::new(),
             },
-            keypair: Box::leak(Box::new(Keypair::new())),
+            keypair: Arc::new(Keypair::new()),
             unchecked_capacity: 64,
             checked_capacity: 64,
             bundle_capacity: 16,

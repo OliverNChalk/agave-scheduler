@@ -39,7 +39,7 @@ pub struct JitoArgs {
 pub(crate) struct JitoThread {
     update_tx: crossbeam_channel::Sender<JitoUpdate>,
     endpoint: Endpoint,
-    keypair: &'static Keypair,
+    keypair: Arc<Keypair>,
 }
 
 impl JitoThread {
@@ -47,7 +47,7 @@ impl JitoThread {
         shutdown: Shutdown,
         update_tx: crossbeam_channel::Sender<JitoUpdate>,
         config: JitoArgs,
-        keypair: &'static Keypair,
+        keypair: Arc<Keypair>,
     ) -> JoinHandle<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
