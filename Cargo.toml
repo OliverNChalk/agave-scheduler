@@ -57,7 +57,8 @@ agave-feature-set = { git = "https://github.com/anza-xyz/agave" }
 agave-scheduler-batch.path = "./crates/scheduler-batch"
 agave-scheduler-bindings = { git = "https://github.com/anza-xyz/agave" }
 agave-scheduler-fifo.path = "./crates/scheduler-fifo"
-agave-scheduler-greedy.path = "./crates/scheduler-greedy"
+agave-scheduler-greedy-revenue.path = "./crates/scheduler-greedy-revenue"
+agave-scheduler-greedy-throughput.path = "./crates/scheduler-greedy-throughput"
 agave-schedulers.path = "./crates/schedulers"
 agave-scheduling-utils = { git = "https://github.com/anza-xyz/agave" }
 agave-transaction-view = { git = "https://github.com/anza-xyz/agave" }

@@ -5,7 +5,8 @@ use std::time::Duration;
 use agave_bridge::SchedulerBindings;
 use agave_scheduler_batch::BatchScheduler;
 use agave_scheduler_fifo::FifoScheduler;
-use agave_scheduler_greedy::GreedyScheduler;
+use agave_scheduler_greedy_revenue::GreedyRevenueScheduler;
+use agave_scheduler_greedy_throughput::GreedyThroughputScheduler;
 use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::handshake::{ClientLogon, client as handshake_client};
 use toolbox::shutdown::Shutdown;
@@ -72,7 +73,15 @@ impl Scheduler for FifoScheduler {
     }
 }
 
-impl Scheduler for GreedyScheduler {
+impl Scheduler for GreedyRevenueScheduler {
+    type Meta = PriorityId;
+
+    fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>) {
+        self.poll(bridge);
+    }
+}
+
+impl Scheduler for GreedyThroughputScheduler {
     type Meta = PriorityId;
 
     fn poll(&mut self, bridge: &mut SchedulerBindings<Self::Meta>) {

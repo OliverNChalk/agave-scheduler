@@ -16,7 +16,8 @@ pub(crate) struct Config {
 pub(crate) enum SchedulerConfig {
     Batch(BatchSchedulerConfig),
     Fifo,
-    Greedy,
+    GreedyRevenue,
+    GreedyThroughput,
 }
 
 #[derive(Debug, Deserialize)]

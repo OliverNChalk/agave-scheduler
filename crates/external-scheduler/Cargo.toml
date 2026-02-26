@@ -12,7 +12,8 @@ workspace = true
 agave-bridge.workspace = true
 agave-scheduler-batch.workspace = true
 agave-scheduler-fifo.workspace = true
-agave-scheduler-greedy.workspace = true
+agave-scheduler-greedy-revenue.workspace = true
+agave-scheduler-greedy-throughput.workspace = true
 agave-schedulers.workspace = true
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }

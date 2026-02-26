@@ -1,5 +1,5 @@
 [package]
-name = "agave-scheduler-greedy"
+name = "agave-scheduler-greedy-throughput"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -31,6 +31,7 @@ solana-transaction.workspace = true
 static_assertions.workspace = true
 
 [dev-dependencies]
+agave-bridge = { workspace = true, features = ["testing"] }
 solana-compute-budget-interface.workspace = true
 solana-hash.workspace = true
 solana-keypair.workspace = true

@@ -56,14 +56,14 @@ const BLOCK_FILL_CUTOFF: u8 = 20;
 const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, Deserialize)]
-pub struct GreedyArgs {
+pub struct GreedyRevenueArgs {
     pub workers: usize,
     pub unchecked_capacity: usize,
     pub checked_capacity: usize,
 }
 
-pub struct GreedyScheduler {
-    args: GreedyArgs,
+pub struct GreedyRevenueScheduler {
+    args: GreedyRevenueArgs,
 
     unchecked_tx: MinMaxHeap<PriorityId>,
     checked_tx: BTreeSet<PriorityId>,
@@ -81,14 +81,14 @@ pub struct GreedyScheduler {
     metrics: BatchMetrics,
 }
 
-impl GreedyScheduler {
+impl GreedyRevenueScheduler {
     /// Create a new greedy scheduler.
     ///
     /// # Panics
     ///
-    /// - If [`GreedyArgs::workers`] is < 2.
+    /// - If [`GreedyRevenueArgs::workers`] is < 2.
     #[must_use]
-    pub fn new(events: Option<EventEmitter>, args: GreedyArgs) -> Self {
+    pub fn new(events: Option<EventEmitter>, args: GreedyRevenueArgs) -> Self {
         assert!(args.workers >= 2, "need at least 2 workers");
 
         Self {
@@ -892,10 +892,10 @@ mod tests {
         current_slot_progress: 25,
     };
 
-    fn test_scheduler() -> GreedyScheduler {
-        GreedyScheduler::new(
+    fn test_scheduler() -> GreedyRevenueScheduler {
+        GreedyRevenueScheduler::new(
             None,
-            GreedyArgs { workers: 5, unchecked_capacity: 64, checked_capacity: 64 },
+            GreedyRevenueArgs { workers: 5, unchecked_capacity: 64, checked_capacity: 64 },
         )
     }
 
@@ -913,7 +913,7 @@ mod tests {
     }
 
     type SetupExecuting = (
-        GreedyScheduler,
+        GreedyRevenueScheduler,
         TestBridge<PriorityId>,
         ScheduleBatch<Vec<KeyedTransactionMeta<PriorityId>>>,
     );

@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use agave_scheduler_batch::{BatchScheduler, BatchSchedulerArgs, JitoArgs, TipDistributionArgs};
 use agave_scheduler_fifo::FifoScheduler;
-use agave_scheduler_greedy::{GreedyArgs, GreedyScheduler};
+use agave_scheduler_greedy_revenue::{GreedyRevenueArgs, GreedyRevenueScheduler};
+use agave_scheduler_greedy_throughput::{GreedyThroughputArgs, GreedyThroughputScheduler};
 use agave_schedulers::events::{EventContext, EventEmitter};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -103,13 +104,28 @@ impl ControlThread {
                 FifoScheduler::new(),
                 4,
             )),
-            SchedulerConfig::Greedy => {
-                threads.push(crate::scheduler_thread::spawn::<GreedyScheduler>(
+            SchedulerConfig::GreedyRevenue => {
+                threads.push(crate::scheduler_thread::spawn::<GreedyRevenueScheduler>(
                     shutdown.clone(),
                     args.bindings_ipc,
-                    GreedyScheduler::new(
+                    GreedyRevenueScheduler::new(
                         Some(events),
-                        GreedyArgs {
+                        GreedyRevenueArgs {
+                            workers: 5,
+                            unchecked_capacity: 64 * 1024,
+                            checked_capacity: 64 * 1024,
+                        },
+                    ),
+                    5,
+                ));
+            }
+            SchedulerConfig::GreedyThroughput => {
+                threads.push(crate::scheduler_thread::spawn::<GreedyThroughputScheduler>(
+                    shutdown.clone(),
+                    args.bindings_ipc,
+                    GreedyThroughputScheduler::new(
+                        Some(events),
+                        GreedyThroughputArgs {
                             workers: 5,
                             unchecked_capacity: 64 * 1024,
                             checked_capacity: 64 * 1024,
