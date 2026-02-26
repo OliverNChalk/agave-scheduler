@@ -839,36 +839,40 @@ impl BatchMetrics {
 
 #[derive(Debug, Default)]
 struct AccountLockers {
-    writers: HashSet<TransactionKey>,
+    writer: Option<TransactionKey>,
     readers: HashSet<TransactionKey>,
 }
 
 impl AccountLockers {
     fn is_empty(&self) -> bool {
-        self.writers.is_empty() && self.readers.is_empty()
+        self.writer.is_none() && self.readers.is_empty()
     }
 
     fn can_lock(&self, writable: bool) -> bool {
         match writable {
             true => self.is_empty(),
-            false => self.writers.is_empty(),
+            false => self.writer.is_none(),
         }
     }
 
     fn insert(&mut self, tx_key: TransactionKey, writable: bool) {
-        let set = match writable {
-            true => &mut self.writers,
-            false => &mut self.readers,
-        };
-        assert!(set.insert(tx_key));
+        match writable {
+            true => {
+                assert!(self.writer.is_none());
+                self.writer = Some(tx_key);
+            }
+            false => assert!(self.readers.insert(tx_key)),
+        }
     }
 
     fn remove(&mut self, tx_key: TransactionKey, writable: bool) {
-        let set = match writable {
-            true => &mut self.writers,
-            false => &mut self.readers,
-        };
-        assert!(set.remove(&tx_key));
+        match writable {
+            true => {
+                assert_eq!(self.writer, Some(tx_key));
+                self.writer = None;
+            }
+            false => assert!(self.readers.remove(&tx_key)),
+        }
     }
 }
 
