@@ -9,7 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-agave-bridge.workspace = true
 agave-scheduler-batch.workspace = true
 agave-scheduler-fifo.workspace = true
 agave-scheduler-greedy-revenue.workspace = true

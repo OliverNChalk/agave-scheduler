@@ -9,17 +9,16 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-agave-bridge.workspace = true
+agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api", "dev-context-only-utils"] }
 chrono = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_with.workspace = true
 solana-clock.workspace = true
 solana-signature.workspace = true
 strum = { workspace = true, features = ["derive"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
-agave-bridge = { workspace = true, features = ["testing"] }
 bincode.workspace = true
 expect-test.workspace = true
 serde_json.workspace = true

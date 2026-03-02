@@ -5,10 +5,6 @@ use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 
-use agave_bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
-    WorkerAction, WorkerResponse,
-};
 use agave_scheduler_bindings::pack_message_flags::check_flags;
 use agave_scheduler_bindings::worker_message_types::{
     CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
@@ -22,6 +18,10 @@ use agave_schedulers::events::{
     TransactionEvent, TransactionSource,
 };
 use agave_schedulers::shared::PriorityId;
+use agave_scheduling_utils::bridge::{
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TxDecision, Worker,
+    WorkerAction, WorkerResponse,
+};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use hashbrown::hash_map::EntryRef;
@@ -301,7 +301,7 @@ impl GreedyThroughputScheduler {
                     TxDecision::Keep
                 }
                 None => {
-                    self.metrics.recv_tpu_err.increment(1);
+                    self.metrics.recv_tpu_err_priority.increment(1);
 
                     TxDecision::Drop
                 }
@@ -790,7 +790,7 @@ struct GreedyThroughputMetrics {
     in_flight_cus: Gauge,
 
     recv_tpu_ok: Counter,
-    recv_tpu_err: Counter,
+    recv_tpu_err_priority: Counter,
     recv_tpu_evict: Counter,
 
     check_requested: Counter,
@@ -818,7 +818,7 @@ impl GreedyThroughputMetrics {
             executing_len: gauge!("container_len", "label" => "executing"),
 
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
-            recv_tpu_err: counter!("recv_tpu", "label" => "err"),
+            recv_tpu_err_priority: counter!("recv_tpu", "label" => "err", "err" => "priority"),
             recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
 
             in_flight_cus: gauge!("in_flight_cus"),
@@ -878,11 +878,11 @@ impl AccountLockers {
 
 #[cfg(test)]
 mod tests {
-    use agave_bridge::TestBridge;
     use agave_scheduler_bindings::worker_message_types::{
         CheckResponse, parsing_and_sanitization_flags, resolve_flags, status_check_flags,
     };
     use agave_scheduler_bindings::{NOT_LEADER, ProgressMessage, pack_message_flags};
+    use agave_scheduling_utils::bridge::TestBridge;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Signer};

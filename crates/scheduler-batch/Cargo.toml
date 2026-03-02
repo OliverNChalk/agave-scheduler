@@ -9,7 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-agave-bridge.workspace = true
 agave-scheduler-bindings.workspace = true
 agave-schedulers.workspace = true
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }

@@ -5,10 +5,6 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use agave_bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
-    TxDecision, Worker, WorkerAction, WorkerResponse,
-};
 use agave_scheduler_bindings::pack_message_flags::{check_flags, execution_flags};
 use agave_scheduler_bindings::worker_message_types::{
     CheckResponse, ExecutionResponse, fee_payer_balance_flags, not_included_reasons,
@@ -22,6 +18,10 @@ use agave_schedulers::events::{
     TransactionEvent, TransactionSource,
 };
 use agave_schedulers::shared::PriorityId;
+use agave_scheduling_utils::bridge::{
+    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
+    TxDecision, Worker, WorkerAction, WorkerResponse,
+};
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
@@ -1336,11 +1336,11 @@ struct BundleId {
 
 #[cfg(test)]
 mod tests {
-    use agave_bridge::TestBridge;
     use agave_scheduler_bindings::worker_message_types::{
         CheckResponse, parsing_and_sanitization_flags, resolve_flags, status_check_flags,
     };
     use agave_scheduler_bindings::{NOT_LEADER, ProgressMessage, pack_message_flags};
+    use agave_scheduling_utils::bridge::TestBridge;
     use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_keypair::{Keypair, Signer};
