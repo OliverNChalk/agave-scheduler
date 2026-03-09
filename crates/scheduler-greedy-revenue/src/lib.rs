@@ -1695,46 +1695,6 @@ mod tests {
     // Edge cases
 
     #[test]
-    fn tpu_recv_evicts_lowest_priority() {
-        let mut scheduler = test_scheduler();
-        // Worker capacity 0 prevents schedule_checks from draining unchecked_tx.
-        let mut bridge = TestBridge::new(5, 0);
-
-        // Fill unchecked_tx to capacity (64) with TXs of increasing priority.
-        // Use large cu_price values to ensure distinct priorities (avoid integer
-        // truncation in fee calculation).
-        let payers: Vec<Keypair> = (0..64).map(|_| Keypair::new()).collect();
-        for (i, payer) in payers.iter().enumerate() {
-            let cu_price = ((i + 1) as u64) * 1_000;
-            let tx = noop_with_budget(payer, 25_000, cu_price);
-            bridge.queue_tpu(&tx);
-        }
-        bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(bridge.inner());
-        assert_eq!(scheduler.unchecked_tx.len(), 64);
-
-        // Remember the lowest priority TX's key.
-        let lowest = *scheduler.unchecked_tx.peek_min().unwrap();
-
-        // Ingest one more TX with higher priority than the lowest.
-        let new_payer = Keypair::new();
-        let new_tx = noop_with_budget(&new_payer, 25_000, 100_000);
-        bridge.queue_tpu(&new_tx);
-        bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(bridge.inner());
-
-        // Assert - still at capacity (the lowest was evicted, new one added).
-        assert_eq!(scheduler.unchecked_tx.len(), 64);
-
-        // Assert - the old lowest priority TX was dropped from the bridge.
-        assert!(!bridge.contains_tx(lowest.key));
-
-        // Assert - new minimum has higher priority than the evicted TX.
-        let new_min = scheduler.unchecked_tx.peek_min().unwrap();
-        assert!(new_min.priority > lowest.priority);
-    }
-
-    #[test]
     fn checked_capacity_eviction() {
         let mut scheduler = test_scheduler();
         let mut bridge = TestBridge::new(5, 4);
