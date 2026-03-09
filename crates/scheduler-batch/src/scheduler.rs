@@ -1426,12 +1426,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Complete checks.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
 
         // Provide tip config before becoming leader.
@@ -1442,11 +1442,11 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -1487,12 +1487,12 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.bundles.len(), 1);
 
         // Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -1523,7 +1523,7 @@ mod tests {
         bridge.queue_tpu(&tx);
 
         // Poll the scheduler.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - A single check request was scheduled.
         let batch = bridge.pop_schedule().unwrap();
@@ -1553,7 +1553,7 @@ mod tests {
         bridge.queue_tpu(&tx);
 
         // Poll the scheduler.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - No check scheduled (TX was filtered).
         assert_eq!(bridge.pop_schedule(), None);
@@ -1578,7 +1578,7 @@ mod tests {
             .unwrap();
 
         // Poll to drain jito messages and schedule checks.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - A single check request was scheduled.
         let batch = bridge.pop_schedule().unwrap();
@@ -1610,7 +1610,7 @@ mod tests {
             .unwrap();
 
         // Poll to drain jito messages.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - No check scheduled and TX dropped from bridge.
         assert_eq!(bridge.pop_schedule(), None);
@@ -1639,7 +1639,7 @@ mod tests {
             .unwrap();
 
         // Poll to drain jito messages.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - Bundle is stored in the scheduler.
         assert_eq!(scheduler.bundles.len(), 1);
@@ -1676,7 +1676,7 @@ mod tests {
             .unwrap();
 
         // Poll to drain jito messages.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - Entire bundle rejected; no bundles stored.
         assert_eq!(scheduler.bundles.len(), 0);
@@ -1701,7 +1701,7 @@ mod tests {
             .unwrap();
 
         // Poll to drain jito messages.
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - Entire bundle rejected.
         assert_eq!(scheduler.bundles.len(), 0);
@@ -1725,7 +1725,7 @@ mod tests {
 
         // Poll - TX ingested into unchecked, CHECK batch scheduled.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.unchecked_tx.len(), 0); // drained to check worker
         let check_batch = bridge.pop_schedule().unwrap();
         assert_eq!(check_batch.flags & 1, pack_message_flags::CHECK);
@@ -1736,7 +1736,7 @@ mod tests {
 
         // Poll - check response drained, TX moves to checked.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
         assert_eq!(bridge.tx_count(), 1);
 
@@ -1748,11 +1748,11 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Transition to leader - TX should be scheduled for execution.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -1789,7 +1789,7 @@ mod tests {
 
         // Poll - all three are checked.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         let check_batch = bridge.pop_schedule().unwrap();
         assert_eq!(check_batch.transactions.len(), 3);
 
@@ -1816,7 +1816,7 @@ mod tests {
 
         // Poll.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Asset - all 3 are dropped.
         assert_eq!(scheduler.unchecked_tx.len(), 0);
@@ -1843,12 +1843,12 @@ mod tests {
 
         // Scheduler picks up TX from tpu queue.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         bridge.queue_all_checks_ok();
 
         // Scheduler picks up check result from worker queue.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Asser - TX moves to check.
         assert_eq!(scheduler.checked_tx.len(), 1);
@@ -1862,17 +1862,17 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // First leader poll we become leader & next_recheck is set.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert!(scheduler.checked_tx.contains(&checked_meta));
         while bridge.pop_schedule().is_some() {}
 
         // Second leader poll, we queue the recheck to the worker.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - the check should contain our checked TX (recheck).
         let recheck_batch = bridge.pop_schedule().unwrap();
@@ -1894,7 +1894,7 @@ mod tests {
 
         // Poll - recheck OK is a no-op; TX stays in checked.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert!(scheduler.checked_tx.contains(&checked_meta));
         assert!(bridge.contains_tx(checked_meta.key));
     }
@@ -1916,11 +1916,11 @@ mod tests {
         let tx = noop_with_budget(&payer, 25_000, 100);
         bridge.queue_tpu(&tx);
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Checks ok.
         bridge.queue_all_checks_ok();
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
         let checked_meta = *scheduler.checked_tx.last().unwrap();
 
@@ -1931,17 +1931,17 @@ mod tests {
                 block_builder: Pubkey::new_unique(),
             }))
             .unwrap();
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - become_tip_receiver fires, TX stays in checked (no budget),
         // next_recheck set.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         while bridge.pop_schedule().is_some() {} // Could be 1 batch in future.
 
         // Poll - schedule_checks fires the recheck.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - One batch is scheduled (recheck).
         let recheck_batch = bridge.pop_schedule().unwrap();
@@ -1961,7 +1961,7 @@ mod tests {
             ..bridge.check_ok()
         };
         bridge.queue_check_response_with(&recheck_batch, idx, None, status_fail);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - Checked TX dropped.
         assert!(!scheduler.checked_tx.contains(&checked_meta));
@@ -1986,12 +1986,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Complete checks successfully.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 2);
 
         // Poll - Provide tip config before becoming leader.
@@ -2002,11 +2002,11 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2053,12 +2053,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Complete checks successfully.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
 
         // Poll - Provide tip config before becoming leader.
@@ -2069,7 +2069,7 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Transition to leader with zero remaining CUs (no budget).
         bridge.queue_progress(ProgressMessage {
@@ -2077,7 +2077,7 @@ mod tests {
             remaining_cost_units: 0,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2144,12 +2144,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Complete checks successfully.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 2);
 
         // Poll - Provide tip config before becoming leader.
@@ -2160,11 +2160,11 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches.
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2197,17 +2197,17 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Poll - Complete checks successfully.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
 
         // Poll again as NOT_LEADER (MOCK_PROGRESS has leader_state = NOT_LEADER).
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - Only check batches (rechecks), no execute batches.
         while let Some(batch) = bridge.pop_schedule() {
@@ -2239,12 +2239,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Complete checks.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
 
         // Ingest a higher-priority bundle via Jito.
@@ -2262,12 +2262,12 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.bundles.len(), 1);
 
         // Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2313,12 +2313,12 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.bundles.len(), 1);
 
         // Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2378,12 +2378,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Complete checks.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
 
         // Ingest a bundle whose TX also writes to shared_account (lower priority).
@@ -2415,12 +2415,12 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.bundles.len(), 1);
 
         // Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2479,12 +2479,12 @@ mod tests {
 
         // Poll - ingest & schedule checks.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Complete checks.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
 
         // Ingest a bundle whose TX also writes to shared_account (lower priority).
@@ -2516,12 +2516,12 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.bundles.len(), 1);
 
         // Transition to leader.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Skip past the become-tip-receiver batches (2x EXECUTE|DROP_ON_FAILURE).
         let tip0 = bridge.pop_schedule().unwrap();
@@ -2554,7 +2554,7 @@ mod tests {
 
         // Poll to drain the response.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // TX dropped from bridge, removed from executing, not in checked or deferred.
         assert!(!bridge.contains_tx(tx_key));
@@ -2577,7 +2577,7 @@ mod tests {
 
         // Poll as NOT_LEADER so schedule_execute doesn't immediately re-schedule.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // TX goes back to checked (immediate retry), not deferred.
         assert!(bridge.contains_tx(tx_key));
@@ -2600,7 +2600,7 @@ mod tests {
 
         // Poll to drain the response.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // TX goes to deferred (not checked), will retry next slot.
         assert!(bridge.contains_tx(tx_key));
@@ -2623,7 +2623,7 @@ mod tests {
 
         // Poll to drain the response - TX moves to deferred.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert!(scheduler.deferred_tx.iter().any(|id| id.key == tx_key));
 
         // Roll to the next slot.
@@ -2631,7 +2631,7 @@ mod tests {
             current_slot: MOCK_PROGRESS.current_slot + 1,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Deferred TX drained back to checked.
         assert_eq!(scheduler.deferred_tx.len(), 0);
@@ -2653,7 +2653,7 @@ mod tests {
 
         // Poll to drain the response.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // TX dropped entirely.
         assert!(!bridge.contains_tx(tx_key));
@@ -2676,7 +2676,7 @@ mod tests {
 
         // Poll to drain the response.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Bundle TX is dropped regardless of retryability.
         assert!(!bridge.contains_tx(tx_key));
@@ -2695,7 +2695,7 @@ mod tests {
 
         // Poll as NOT_LEADER so schedule_execute doesn't immediately re-schedule.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // TX returns to checked, not dropped.
         assert!(bridge.contains_tx(tx_key));
@@ -2714,7 +2714,7 @@ mod tests {
 
         // Poll to drain the response.
         bridge.queue_progress(ProgressMessage { leader_state: LEADER_READY, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Bundle TX is dropped (bundles are never retried).
         assert!(!bridge.contains_tx(tx_key));
@@ -2739,7 +2739,7 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(ProgressMessage { current_slot: 1, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(bridge.pop_schedule(), None);
 
         // Transition to leader & poll.
@@ -2748,7 +2748,7 @@ mod tests {
             current_slot: 1,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - our become receiver batches scheduled.
         let expected_flags = pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE;
@@ -2780,7 +2780,7 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(ProgressMessage { current_slot: 1, ..MOCK_PROGRESS });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // First LEADER_READY poll - tip TXs are scheduled.
         bridge.queue_progress(ProgressMessage {
@@ -2788,7 +2788,7 @@ mod tests {
             current_slot: 1,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         let tip0 = bridge.pop_schedule().unwrap();
         assert_ne!(tip0.flags & pack_message_flags::EXECUTE, 0);
@@ -2802,7 +2802,7 @@ mod tests {
             current_slot: 1,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - no new EXECUTE|DROP_ON_FAILURE batches (become_receiver didn't fire
         // again).
@@ -2829,7 +2829,7 @@ mod tests {
 
         // Poll - TX moves to deferred.
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert!(scheduler.deferred_tx.iter().any(|id| id.key == tx_key));
         assert_eq!(scheduler.checked_tx.len(), 0);
 
@@ -2838,7 +2838,7 @@ mod tests {
             current_slot: MOCK_PROGRESS.current_slot + 1,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Deferred TX drained back to checked.
         assert_eq!(scheduler.deferred_tx.len(), 0);
@@ -2866,10 +2866,10 @@ mod tests {
         let tx = noop_with_budget(&payer, 25_000, 100);
         bridge.queue_tpu(&tx);
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 1);
         let checked_meta = *scheduler.checked_tx.last().unwrap();
 
@@ -2881,16 +2881,16 @@ mod tests {
             }))
             .unwrap();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // First leader poll - become_receiver fires, next_recheck set.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         while bridge.pop_schedule().is_some() {}
 
         // Second leader poll - recheck is scheduled.
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         let recheck_batch = bridge.pop_schedule().unwrap();
         assert_eq!(recheck_batch.flags & 1, pack_message_flags::CHECK);
         assert!(
@@ -2903,7 +2903,7 @@ mod tests {
 
         // Third leader poll - recheck response drained, cursor exhausted (only 1 TX).
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert!(scheduler.next_recheck.is_some()); // Re-initialized by poll.
 
         // Exhaust remaining rechecks so cursor is fully consumed.
@@ -2915,7 +2915,7 @@ mod tests {
             }
         }
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         // After exhausting all rechecks, cursor should be None.
         while let Some(batch) = bridge.pop_schedule() {
             if batch.flags & 1 == pack_message_flags::CHECK {
@@ -2925,7 +2925,7 @@ mod tests {
             }
         }
         bridge.queue_progress(leader_no_budget);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         while bridge.pop_schedule().is_some() {}
 
         // Now roll to a new slot - cursor should reset.
@@ -2936,7 +2936,7 @@ mod tests {
             remaining_cost_units: 0,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         while bridge.pop_schedule().is_some() {} // Drain any become_receiver batches.
 
         // Poll again - recheck should be scheduled (cursor was reset by slot roll).
@@ -2946,7 +2946,7 @@ mod tests {
             remaining_cost_units: 0,
             ..MOCK_PROGRESS
         });
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - a check batch containing our TX is scheduled (recheck restarted).
         let mut found_recheck = false;
@@ -2980,7 +2980,7 @@ mod tests {
             bridge.queue_tpu(&tx);
         }
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.unchecked_tx.len(), 64);
 
         // Remember the lowest priority TX's key.
@@ -2991,7 +2991,7 @@ mod tests {
         let new_tx = noop_with_budget(&new_payer, 25_000, 100_000);
         bridge.queue_tpu(&new_tx);
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - still at capacity (the lowest was evicted, new one added).
         assert_eq!(scheduler.unchecked_tx.len(), 64);
@@ -3018,12 +3018,12 @@ mod tests {
             bridge.queue_tpu(&tx);
         }
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Complete all checks.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
         assert_eq!(scheduler.checked_tx.len(), 64);
         assert_eq!(scheduler.unchecked_tx.len(), 0);
 
@@ -3035,12 +3035,12 @@ mod tests {
         let new_tx = noop_with_budget(&new_payer, 25_000, 100_000);
         bridge.queue_tpu(&new_tx);
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Complete the new TX's check.
         bridge.queue_all_checks_ok();
         bridge.queue_progress(MOCK_PROGRESS);
-        scheduler.poll(&mut bridge);
+        scheduler.poll(bridge.inner());
 
         // Assert - checked_tx is still at capacity (lowest was evicted, new one
         // inserted).
