@@ -29,8 +29,7 @@ impl FifoScheduler {
         }
     }
 
-    pub fn poll(&mut self, bridge: &mut SchedulerBindingsBridge<()>)
-    {
+    pub fn poll(&mut self, bridge: &mut SchedulerBindingsBridge<()>) {
         // Drain the progress tracker so we know which slot we're on.
         let _ = bridge.drain_progress();
 
@@ -86,8 +85,7 @@ impl FifoScheduler {
         self.schedule(bridge);
     }
 
-    fn schedule(&mut self, bridge: &mut SchedulerBindingsBridge<()>)
-    {
+    fn schedule(&mut self, bridge: &mut SchedulerBindingsBridge<()>) {
         // Schedule additional checks.
         while !bridge.worker(CHECK_WORKER).is_empty() {
             self.batch.clear();
