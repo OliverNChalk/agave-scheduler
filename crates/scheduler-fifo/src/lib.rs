@@ -6,8 +6,8 @@ use agave_scheduler_bindings::worker_message_types::{
 };
 use agave_scheduler_bindings::{LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
 use agave_scheduling_utils::bridge::{
-    Bridge, KeyedTransactionMeta, ScheduleBatch, TransactionKey, TxDecision, Worker, WorkerAction,
-    WorkerResponse,
+    KeyedTransactionMeta, ScheduleBatch, SchedulerBindingsBridge, TransactionKey, TxDecision,
+    Worker, WorkerAction, WorkerResponse,
 };
 
 const CHECK_WORKER: usize = 0;
@@ -29,9 +29,7 @@ impl FifoScheduler {
         }
     }
 
-    pub fn poll<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = ()>,
+    pub fn poll(&mut self, bridge: &mut SchedulerBindingsBridge<()>)
     {
         // Drain the progress tracker so we know which slot we're on.
         let _ = bridge.drain_progress();
@@ -88,9 +86,7 @@ impl FifoScheduler {
         self.schedule(bridge);
     }
 
-    fn schedule<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = ()>,
+    fn schedule(&mut self, bridge: &mut SchedulerBindingsBridge<()>)
     {
         // Schedule additional checks.
         while !bridge.worker(CHECK_WORKER).is_empty() {

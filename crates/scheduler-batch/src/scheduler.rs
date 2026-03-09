@@ -19,8 +19,8 @@ use agave_schedulers::events::{
 };
 use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::bridge::{
-    Bridge, KeyedTransactionMeta, RuntimeState, ScheduleBatch, TransactionKey, TransactionState,
-    TxDecision, Worker, WorkerAction, WorkerResponse,
+    KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
+    TransactionState, TxDecision, Worker, WorkerAction, WorkerResponse,
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
@@ -171,9 +171,7 @@ impl BatchScheduler {
         }
     }
 
-    pub fn poll<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    pub fn poll(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         // Drain the progress tracker & check for roll.
         self.check_slot_roll(bridge);
@@ -233,9 +231,7 @@ impl BatchScheduler {
         self.metrics.in_flight_cus.set(self.in_flight_cus as f64);
     }
 
-    fn check_slot_roll<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn check_slot_roll(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         // Drain progress and check for disconnect.
         match bridge.drain_progress() {
@@ -294,9 +290,7 @@ impl BatchScheduler {
         }
     }
 
-    fn become_tip_receiver<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn become_tip_receiver(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         info!("Becoming tip receiver");
 
@@ -362,9 +356,7 @@ impl BatchScheduler {
         });
     }
 
-    fn drain_worker_responses<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn drain_worker_responses(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         for worker in 0..5 {
             bridge.worker_drain(
@@ -404,9 +396,7 @@ impl BatchScheduler {
         }
     }
 
-    fn drain_tpu<B>(&mut self, bridge: &mut B, max_count: usize)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn drain_tpu(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>, max_count: usize)
     {
         let additional = std::cmp::min(bridge.tpu_len(), max_count);
         let shortfall =
@@ -459,9 +449,7 @@ impl BatchScheduler {
         );
     }
 
-    fn drain_jito<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn drain_jito(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         loop {
             match self.jito_rx.try_recv() {
@@ -476,9 +464,7 @@ impl BatchScheduler {
         }
     }
 
-    fn on_packet<B>(&mut self, bridge: &mut B, packet: &[u8])
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn on_packet(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>, packet: &[u8])
     {
         let Ok(key) = bridge.tx_insert(packet) else {
             return;
@@ -525,9 +511,7 @@ impl BatchScheduler {
         }
     }
 
-    fn on_bundle<B>(&mut self, bridge: &mut B, bundle: Vec<Vec<u8>>)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn on_bundle(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>, bundle: Vec<Vec<u8>>)
     {
         let mut keys = Vec::with_capacity(bundle.len());
         let mut total_cost: u64 = 0;
@@ -617,9 +601,7 @@ impl BatchScheduler {
         });
     }
 
-    fn drop_expired_bundles<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn drop_expired_bundles(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         let now = Instant::now();
         // Retain only non-expired bundles, dropping expired ones.
@@ -640,9 +622,7 @@ impl BatchScheduler {
         }
     }
 
-    fn schedule_checks<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn schedule_checks(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         // Loop until worker queue is filled or backlog is empty.
         let start_len = self.unchecked_tx.len();
@@ -702,9 +682,7 @@ impl BatchScheduler {
             .increment((start_len - self.unchecked_tx.len()) as u64);
     }
 
-    fn schedule_execute<B>(&mut self, bridge: &mut B)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn schedule_execute(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>)
     {
         debug_assert_eq!(bridge.progress().leader_state, LEADER_READY);
         let budget_percentage =
@@ -765,9 +743,12 @@ impl BatchScheduler {
         }
     }
 
-    fn on_check<B>(&mut self, bridge: &mut B, meta: PriorityId, rep: CheckResponse) -> TxDecision
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn on_check(
+        &mut self,
+        bridge: &mut SchedulerBindingsBridge<PriorityId>,
+        meta: PriorityId,
+        rep: CheckResponse,
+    ) -> TxDecision
     {
         // If transaction is currently executing (or deferred), ignore the recheck
         // result.
@@ -848,14 +829,12 @@ impl BatchScheduler {
         TxDecision::Keep
     }
 
-    fn on_execute<B>(
+    fn on_execute(
         &mut self,
-        bridge: &mut B,
+        bridge: &mut SchedulerBindingsBridge<PriorityId>,
         meta: PriorityId,
         rep: ExecutionResponse,
     ) -> TxDecision
-    where
-        B: Bridge<Meta = PriorityId>,
     {
         // Remove from executing set now that execution is complete.
         assert!(self.executing_tx.remove(&meta.key));
@@ -935,9 +914,12 @@ impl BatchScheduler {
     /// # Return
     ///
     /// Places scheduled transactions in `self.schedule_batch`.
-    fn try_schedule_transaction<B>(&mut self, budget: &mut u64, bridge: &mut B, worker: usize)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn try_schedule_transaction(
+        &mut self,
+        budget: &mut u64,
+        bridge: &mut SchedulerBindingsBridge<PriorityId>,
+        worker: usize,
+    )
     {
         let tx = self.checked_tx.last().unwrap();
 
@@ -978,9 +960,12 @@ impl BatchScheduler {
     /// # Return
     ///
     /// Places scheduled transactions in `self.schedule_batch`.
-    fn try_schedule_bundle<B>(&mut self, budget: &mut u64, bridge: &mut B, worker: usize)
-    where
-        B: Bridge<Meta = PriorityId>,
+    fn try_schedule_bundle(
+        &mut self,
+        budget: &mut u64,
+        bridge: &mut SchedulerBindingsBridge<PriorityId>,
+        worker: usize,
+    )
     {
         let bundle = self.bundles.last().unwrap();
 
@@ -1041,13 +1026,11 @@ impl BatchScheduler {
     }
 
     /// Checks a TX for lock conflicts without inserting locks.
-    fn can_lock<B>(
+    fn can_lock(
         in_flight_locks: &HashMap<Pubkey, AccountLockers>,
-        bridge: &mut B,
+        bridge: &mut SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
     ) -> bool
-    where
-        B: Bridge,
     {
         // Check if this transaction's read/write locks conflict with any
         // pre-existing read/write locks.
@@ -1059,12 +1042,11 @@ impl BatchScheduler {
     }
 
     /// Locks a transaction without checking for conflicts.
-    fn lock<B>(
+    fn lock(
         in_flight_locks: &mut HashMap<Pubkey, AccountLockers>,
-        bridge: &mut B,
+        bridge: &mut SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
-    ) where
-        B: Bridge,
+    )
     {
         for (addr, writable) in bridge.tx(tx_key).locks() {
             in_flight_locks
@@ -1077,12 +1059,11 @@ impl BatchScheduler {
     /// Unlocks a transaction, releasing all its locks.
     ///
     /// Panics if the transaction doesn't hold the expected locks.
-    fn unlock<B>(
+    fn unlock(
         in_flight_locks: &mut HashMap<Pubkey, AccountLockers>,
-        bridge: &B,
+        bridge: &SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
-    ) where
-        B: Bridge,
+    )
     {
         for (addr, writable) in bridge.tx(tx_key).locks() {
             let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
@@ -1150,14 +1131,13 @@ impl BatchScheduler {
         Some((priority, cost))
     }
 
-    fn emit_tx_event<B>(
+    fn emit_tx_event(
         &self,
-        bridge: &B,
+        bridge: &SchedulerBindingsBridge<PriorityId>,
         key: TransactionKey,
         priority: u64,
         action: TransactionAction,
-    ) where
-        B: Bridge,
+    )
     {
         let Some(events) = &self.events else { return };
 
