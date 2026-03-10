@@ -5801,7 +5801,9 @@ dependencies = [
  "solana-sdk-ids",
  "solana-short-vec",
  "solana-signature",
+ "solana-signer",
  "solana-transaction-error",
+ "wincode",
 ]
 
 [[package]]
