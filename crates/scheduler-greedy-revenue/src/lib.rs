@@ -222,7 +222,7 @@ impl GreedyRevenueScheduler {
 
     fn drain_worker_responses(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>) {
         for worker in 0..self.args.workers {
-            bridge.worker_drain(
+            bridge.drain_worker(
                 worker,
                 |bridge, WorkerResponse { meta, response, .. }| {
                     match response {
@@ -268,14 +268,14 @@ impl GreedyRevenueScheduler {
                 id.priority,
                 TransactionAction::Evict { reason: EvictReason::UncheckedCapacity },
             );
-            bridge.tx_drop(id.key);
+            bridge.drop_transaction(id.key);
         }
         self.metrics.recv_tpu_evict.increment(shortfall as u64);
 
         // TODO: Need to dedupe already seen transactions?
 
-        bridge.tpu_drain(
-            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+        bridge.drain_tpu(
+            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
                 Some((priority, cost)) => {
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
@@ -477,7 +477,7 @@ impl GreedyRevenueScheduler {
                 id.priority,
                 TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
             );
-            bridge.tx_drop(id.key);
+            bridge.drop_transaction(id.key);
 
             self.metrics.check_evict.increment(1);
         }
@@ -545,7 +545,7 @@ impl GreedyRevenueScheduler {
                 evicted.priority,
                 TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
             );
-            bridge.tx_drop(evicted.key);
+            bridge.drop_transaction(evicted.key);
             self.metrics.execute_evict.increment(1);
         }
 
@@ -625,7 +625,7 @@ impl GreedyRevenueScheduler {
     ) -> bool {
         // Check if this transaction's read/write locks conflict with any
         // pre-existing read/write locks.
-        bridge.tx(tx_key).locks().all(|(addr, writable)| {
+        bridge.transaction(tx_key).locks().all(|(addr, writable)| {
             in_flight_locks
                 .get(addr)
                 .is_none_or(|lockers| lockers.can_lock(writable))
@@ -638,7 +638,7 @@ impl GreedyRevenueScheduler {
         bridge: &mut SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
     ) {
-        for (addr, writable) in bridge.tx(tx_key).locks() {
+        for (addr, writable) in bridge.transaction(tx_key).locks() {
             in_flight_locks
                 .entry_ref(addr)
                 .or_default()
@@ -654,7 +654,7 @@ impl GreedyRevenueScheduler {
         bridge: &SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
     ) {
-        for (addr, writable) in bridge.tx(tx_key).locks() {
+        for (addr, writable) in bridge.transaction(tx_key).locks() {
             let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
                 panic!();
             };
@@ -730,7 +730,7 @@ impl GreedyRevenueScheduler {
         let Some(events) = &self.events else { return };
 
         // Don't emit for vote TXs (save my disk/familia).
-        let tx = bridge.tx(key);
+        let tx = bridge.transaction(key);
         if tx.is_simple_vote() {
             return;
         }

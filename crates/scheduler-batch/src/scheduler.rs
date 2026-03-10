@@ -297,7 +297,7 @@ impl BatchScheduler {
             self.slot / DEFAULT_SLOTS_PER_EPOCH,
             self.recent_blockhash,
         );
-        let init_tip_distribution = bridge.tx_insert(&init_tip_distribution).unwrap();
+        let init_tip_distribution = bridge.insert_transaction(&init_tip_distribution).unwrap();
 
         let tip_config = self.tip_config.as_ref().unwrap();
         let change_tip_receiver = change_tip_receiver(
@@ -311,15 +311,15 @@ impl BatchScheduler {
             },
             self.recent_blockhash,
         );
-        let change_tip_receiver = bridge.tx_insert(&change_tip_receiver).unwrap();
+        let change_tip_receiver = bridge.insert_transaction(&change_tip_receiver).unwrap();
 
         // Check if our batch can be locked.
         if !Self::can_lock(&self.in_flight_locks, bridge, init_tip_distribution)
             || !Self::can_lock(&self.in_flight_locks, bridge, change_tip_receiver)
         {
             warn!("Failed to grab locks for change tip receiver");
-            bridge.tx_drop(init_tip_distribution);
-            bridge.tx_drop(change_tip_receiver);
+            bridge.drop_transaction(init_tip_distribution);
+            bridge.drop_transaction(change_tip_receiver);
 
             return;
         }
@@ -355,7 +355,7 @@ impl BatchScheduler {
 
     fn drain_worker_responses(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>) {
         for worker in 0..5 {
-            bridge.worker_drain(
+            bridge.drain_worker(
                 worker,
                 |bridge, WorkerResponse { meta, response, .. }| {
                     match response {
@@ -407,17 +407,17 @@ impl BatchScheduler {
                 id.priority,
                 TransactionAction::Evict { reason: EvictReason::UncheckedCapacity },
             );
-            bridge.tx_drop(id.key);
+            bridge.drop_transaction(id.key);
         }
         self.metrics.recv_tpu_evict.increment(shortfall as u64);
 
         // TODO: Need to dedupe already seen transactions?
 
-        bridge.tpu_drain(
-            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+        bridge.drain_tpu(
+            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
                 Some((priority, cost)) => {
                     // Ban using the tip payment program as it could be used to steal tips.
-                    if Self::should_filter(bridge.tx(key)) {
+                    if Self::should_filter(bridge.transaction(key)) {
                         self.metrics.recv_tpu_filtered.increment(1);
 
                         return TxDecision::Drop;
@@ -459,16 +459,16 @@ impl BatchScheduler {
     }
 
     fn on_packet(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>, packet: &[u8]) {
-        let Ok(key) = bridge.tx_insert(packet) else {
+        let Ok(key) = bridge.insert_transaction(packet) else {
             return;
         };
 
-        match Self::calculate_priority(bridge.runtime(), &bridge.tx(key).data) {
+        match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
             Some((priority, cost)) => {
                 // Ban using the tip payment program as it could be used to steal tips.
-                if Self::should_filter(bridge.tx(key)) {
+                if Self::should_filter(bridge.transaction(key)) {
                     self.metrics.recv_packet_filtered.increment(1);
-                    bridge.tx_drop(key);
+                    bridge.drop_transaction(key);
 
                     return;
                 }
@@ -482,7 +482,7 @@ impl BatchScheduler {
                         id.priority,
                         TransactionAction::Evict { reason: EvictReason::UncheckedCapacity },
                     );
-                    bridge.tx_drop(id.key);
+                    bridge.drop_transaction(id.key);
                     self.metrics.recv_packet_evict.increment(1);
                 }
 
@@ -499,7 +499,7 @@ impl BatchScheduler {
             None => {
                 self.metrics.recv_packet_err.increment(1);
 
-                bridge.tx_drop(key);
+                bridge.drop_transaction(key);
             }
         }
     }
@@ -514,9 +514,9 @@ impl BatchScheduler {
         let mut total_reward: u64 = 0;
 
         for packet in bundle {
-            let Ok(key) = bridge.tx_insert(&packet) else {
+            let Ok(key) = bridge.insert_transaction(&packet) else {
                 for key in keys {
-                    bridge.tx_drop(key);
+                    bridge.drop_transaction(key);
                 }
                 self.metrics.recv_bundle_err.increment(1);
 
@@ -528,10 +528,10 @@ impl BatchScheduler {
 
             // Calculate cost and reward for this transaction.
             let Some((cost, reward)) =
-                Self::calculate_cost_and_reward(bridge.runtime(), &bridge.tx(key).data)
+                Self::calculate_cost_and_reward(bridge.runtime(), &bridge.transaction(key).data)
             else {
                 for key in keys {
-                    bridge.tx_drop(key);
+                    bridge.drop_transaction(key);
                 }
                 self.metrics.recv_bundle_err.increment(1);
 
@@ -539,7 +539,7 @@ impl BatchScheduler {
             };
 
             // Extract tip from this transaction.
-            let tip = Self::extract_tip(&bridge.tx(key).data);
+            let tip = Self::extract_tip(&bridge.transaction(key).data);
 
             // Accumulate totals.
             total_cost += cost;
@@ -547,10 +547,10 @@ impl BatchScheduler {
         }
 
         // Filter bundles containing transactions that write to tip accounts.
-        if keys.iter().any(|key| Self::should_filter(bridge.tx(*key))) {
+        if keys.iter().any(|key| Self::should_filter(bridge.transaction(*key))) {
             self.metrics.recv_bundle_filtered.increment(1);
             for key in keys {
-                bridge.tx_drop(key);
+                bridge.drop_transaction(key);
             }
 
             return;
@@ -563,7 +563,7 @@ impl BatchScheduler {
             .unwrap_or(0);
 
         // Emit ingest events for bundle transactions.
-        let bundle_sig = bridge.tx(keys[0]).data.signatures()[0];
+        let bundle_sig = bridge.transaction(keys[0]).data.signatures()[0];
         let bundle_id = Arc::new(bundle_sig.to_string());
         for &key in &keys {
             self.emit_tx_event(
@@ -581,7 +581,7 @@ impl BatchScheduler {
         if self.bundles.len() == self.bundle_capacity {
             let evicted = self.bundles.pop_first().unwrap();
             for key in evicted.keys {
-                bridge.tx_drop(key);
+                bridge.drop_transaction(key);
             }
             self.metrics.recv_bundle_evict.increment(1);
         }
@@ -612,7 +612,7 @@ impl BatchScheduler {
             self.bundles.remove(&bundle);
             self.metrics.recv_bundle_expired.increment(1);
             for key in bundle.keys {
-                bridge.tx_drop(key);
+                bridge.drop_transaction(key);
             }
         }
     }
@@ -805,7 +805,7 @@ impl BatchScheduler {
                 id.priority,
                 TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
             );
-            bridge.tx_drop(id.key);
+            bridge.drop_transaction(id.key);
 
             self.metrics.check_evict.increment(1);
         }
@@ -873,7 +873,7 @@ impl BatchScheduler {
                 evicted.priority,
                 TransactionAction::Evict { reason: EvictReason::CheckedCapacity },
             );
-            bridge.tx_drop(evicted.key);
+            bridge.drop_transaction(evicted.key);
             self.metrics.execute_evict.increment(1);
         }
 
@@ -1022,7 +1022,7 @@ impl BatchScheduler {
     ) -> bool {
         // Check if this transaction's read/write locks conflict with any
         // pre-existing read/write locks.
-        bridge.tx(tx_key).locks().all(|(addr, writable)| {
+        bridge.transaction(tx_key).locks().all(|(addr, writable)| {
             in_flight_locks
                 .get(addr)
                 .is_none_or(|lockers| lockers.can_lock(writable))
@@ -1035,7 +1035,7 @@ impl BatchScheduler {
         bridge: &mut SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
     ) {
-        for (addr, writable) in bridge.tx(tx_key).locks() {
+        for (addr, writable) in bridge.transaction(tx_key).locks() {
             in_flight_locks
                 .entry_ref(addr)
                 .or_default()
@@ -1051,7 +1051,7 @@ impl BatchScheduler {
         bridge: &SchedulerBindingsBridge<PriorityId>,
         tx_key: TransactionKey,
     ) {
-        for (addr, writable) in bridge.tx(tx_key).locks() {
+        for (addr, writable) in bridge.transaction(tx_key).locks() {
             let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
                 panic!();
             };
@@ -1127,7 +1127,7 @@ impl BatchScheduler {
         let Some(events) = &self.events else { return };
 
         // Don't emit for vote TXs (save my disk/familia).
-        let tx = bridge.tx(key);
+        let tx = bridge.transaction(key);
         if tx.is_simple_vote() {
             return;
         }

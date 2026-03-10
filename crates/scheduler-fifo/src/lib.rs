@@ -34,7 +34,7 @@ impl FifoScheduler {
         let _ = bridge.drain_progress();
 
         // Drain check responses.
-        bridge.worker_drain(
+        bridge.drain_worker(
             CHECK_WORKER,
             |_, WorkerResponse { key, response, .. }| {
                 let WorkerAction::Check(rep, _) = response else {
@@ -61,7 +61,7 @@ impl FifoScheduler {
         );
 
         // Drain execute responses.
-        bridge.worker_drain(
+        bridge.drain_worker(
             EXECUTE_WORKER,
             |_, WorkerResponse { .. }| TxDecision::Drop,
             usize::MAX,
@@ -72,7 +72,7 @@ impl FifoScheduler {
             true => 128,
             false => 1024,
         };
-        bridge.tpu_drain(
+        bridge.drain_tpu(
             |_, key| {
                 self.check_queue.push_back(key);
 
