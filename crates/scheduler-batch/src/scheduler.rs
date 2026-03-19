@@ -390,6 +390,7 @@ impl BatchScheduler {
                                     TransactionAction::ExecuteUnprocessed,
                                 );
                                 self.metrics.execute_unprocessed.increment(1);
+                                self.slot_stats.execute_unprocessed += 1;
                                 self.checked_tx.insert(meta);
                             }
 
@@ -425,6 +426,7 @@ impl BatchScheduler {
             bridge.tx_drop(id.key);
         }
         self.metrics.recv_tpu_evict.increment(shortfall as u64);
+        self.slot_stats.ingest_tpu_evict += shortfall as u64;
 
         // TODO: Need to dedupe already seen transactions?
 
@@ -446,11 +448,13 @@ impl BatchScheduler {
                         TransactionAction::Ingest { source: TransactionSource::Tpu, bundle: None },
                     );
                     self.metrics.recv_tpu_ok.increment(1);
+                    self.slot_stats.ingest_tpu_ok += 1;
 
                     TxDecision::Keep
                 }
                 None => {
                     self.metrics.recv_tpu_err.increment(1);
+                    self.slot_stats.ingest_tpu_err += 1;
 
                     TxDecision::Drop
                 }
@@ -516,9 +520,11 @@ impl BatchScheduler {
                     TransactionAction::Ingest { source: TransactionSource::Jito, bundle: None },
                 );
                 self.metrics.recv_packet_ok.increment(1);
+                self.slot_stats.ingest_custom_ok += 1;
             }
             None => {
                 self.metrics.recv_packet_err.increment(1);
+                self.slot_stats.ingest_custom_err += 1;
 
                 bridge.tx_drop(key);
             }
@@ -697,9 +703,9 @@ impl BatchScheduler {
         }
 
         // Update metrics with our scheduled amount.
-        self.metrics
-            .check_requested
-            .increment((start_len - self.unchecked_tx.len()) as u64);
+        let check_requested = (start_len - self.unchecked_tx.len()) as u64;
+        self.metrics.check_requested.increment(check_requested);
+        self.slot_stats.check_requested += check_requested;
     }
 
     fn schedule_execute<B>(&mut self, bridge: &mut B)
@@ -759,9 +765,9 @@ impl BatchScheduler {
             }
 
             // Update metrics.
-            self.metrics
-                .execute_requested
-                .increment(self.schedule_batch.len() as u64);
+            let execute_requested = self.schedule_batch.len() as u64;
+            self.metrics.execute_requested.increment(execute_requested);
+            self.slot_stats.execute_requested += execute_requested;
         }
     }
 
@@ -794,6 +800,7 @@ impl BatchScheduler {
                 TransactionAction::CheckErr { reason },
             );
             self.metrics.check_err.increment(1);
+            self.slot_stats.check_err += 1;
 
             // NB: If we are re-checking then we must remove here, else we can just silently
             // ignore the None returned by `remove()`.
@@ -819,6 +826,7 @@ impl BatchScheduler {
         // If already in checked_tx, this is a recheck completing - nothing to do.
         if self.checked_tx.contains(&meta) {
             self.metrics.check_ok.increment(1);
+            self.slot_stats.check_ok += 1;
 
             return TxDecision::Keep;
         }
@@ -835,6 +843,7 @@ impl BatchScheduler {
             bridge.tx_drop(id.key);
 
             self.metrics.check_evict.increment(1);
+            self.slot_stats.check_evict += 1;
         }
 
         // Insert the new transaction (yes this may be lower priority than what
@@ -844,6 +853,7 @@ impl BatchScheduler {
 
         // Update ok metric.
         self.metrics.check_ok.increment(1);
+        self.slot_stats.check_ok += 1;
 
         TxDecision::Keep
     }
@@ -867,15 +877,21 @@ impl BatchScheduler {
         Self::unlock(&mut self.in_flight_locks, bridge, meta.key);
 
         // Emit event and update metrics.
-        let (action, metric) = match rep.not_included_reason {
-            not_included_reasons::NONE => (TransactionAction::ExecuteOk, &self.metrics.execute_ok),
-            reason => (
-                TransactionAction::ExecuteErr { reason: u32::from(reason) },
-                &self.metrics.execute_err,
-            ),
+        let action = match rep.not_included_reason {
+            not_included_reasons::NONE => {
+                self.slot_stats.execute_ok += 1;
+                self.metrics.execute_ok.increment(1);
+
+                TransactionAction::ExecuteOk
+            }
+            reason => {
+                self.slot_stats.execute_err += 1;
+                self.metrics.execute_err.increment(1);
+
+                TransactionAction::ExecuteErr { reason: u32::from(reason) }
+            }
         };
         self.emit_tx_event(bridge, meta.key, meta.priority, action);
-        metric.increment(1);
 
         // If non retryable or a bundle, just drop immediately.
         let is_bundle = meta.priority == BUNDLE_MARKER;
