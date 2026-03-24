@@ -7,7 +7,7 @@ use agave_scheduler_bindings::worker_message_types::{
 use agave_scheduler_bindings::{LEADER_READY, MAX_TRANSACTIONS_PER_MESSAGE, pack_message_flags};
 use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, ScheduleBatch, SchedulerBindingsBridge, TransactionKey, TxDecision,
-    Worker, WorkerAction, WorkerResponse,
+    WorkerAction, WorkerResponse,
 };
 
 const CHECK_WORKER: usize = 0;
@@ -94,20 +94,22 @@ impl FifoScheduler {
                     .take(MAX_TRANSACTIONS_PER_MESSAGE)
                     .map(|key| KeyedTransactionMeta { key, meta: () }),
             );
-            bridge.schedule(ScheduleBatch {
-                worker: CHECK_WORKER,
-                transactions: &self.batch,
-                max_working_slot: u64::MAX,
-                flags: pack_message_flags::CHECK
-                    | check_flags::STATUS_CHECKS
-                    | check_flags::LOAD_FEE_PAYER_BALANCE
-                    | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-            });
+            bridge
+                .schedule(ScheduleBatch {
+                    worker: CHECK_WORKER,
+                    transactions: &self.batch,
+                    max_working_slot: u64::MAX,
+                    flags: pack_message_flags::CHECK
+                        | check_flags::STATUS_CHECKS
+                        | check_flags::LOAD_FEE_PAYER_BALANCE
+                        | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
+                })
+                .unwrap();
         }
 
         // If we are the leader, schedule executes.
         if bridge.progress().leader_state == LEADER_READY
-            && bridge.worker(EXECUTE_WORKER).len() == 0
+            && bridge.worker(EXECUTE_WORKER).is_empty()
         {
             self.batch.clear();
             self.batch.extend(
@@ -115,12 +117,14 @@ impl FifoScheduler {
                     .take(MAX_TRANSACTIONS_PER_MESSAGE)
                     .map(|key| KeyedTransactionMeta { key, meta: () }),
             );
-            bridge.schedule(ScheduleBatch {
-                worker: EXECUTE_WORKER,
-                transactions: &self.batch,
-                max_working_slot: bridge.progress().current_slot + 1,
-                flags: pack_message_flags::EXECUTE,
-            });
+            bridge
+                .schedule(ScheduleBatch {
+                    worker: EXECUTE_WORKER,
+                    transactions: &self.batch,
+                    max_working_slot: bridge.progress().current_slot + 1,
+                    flags: pack_message_flags::EXECUTE,
+                })
+                .unwrap();
         }
     }
 }

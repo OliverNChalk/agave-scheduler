@@ -20,7 +20,7 @@ use agave_schedulers::events::{
 use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
-    TxDecision, Worker, WorkerAction, WorkerResponse,
+    TxDecision, WorkerAction, WorkerResponse,
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
@@ -275,7 +275,10 @@ impl GreedyRevenueScheduler {
         // TODO: Need to dedupe already seen transactions?
 
         bridge.drain_tpu(
-            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
+            |bridge, key| match Self::calculate_priority(
+                bridge.runtime(),
+                &bridge.transaction(key).data,
+            ) {
                 Some((priority, cost)) => {
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
@@ -340,15 +343,17 @@ impl GreedyRevenueScheduler {
                 break;
             }
 
-            bridge.schedule(ScheduleBatch {
-                worker: CHECK_WORKER,
-                transactions: &self.schedule_batch,
-                max_working_slot: u64::MAX,
-                flags: pack_message_flags::CHECK
-                    | check_flags::STATUS_CHECKS
-                    | check_flags::LOAD_FEE_PAYER_BALANCE
-                    | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-            });
+            bridge
+                .schedule(ScheduleBatch {
+                    worker: CHECK_WORKER,
+                    transactions: &self.schedule_batch,
+                    max_working_slot: u64::MAX,
+                    flags: pack_message_flags::CHECK
+                        | check_flags::STATUS_CHECKS
+                        | check_flags::LOAD_FEE_PAYER_BALANCE
+                        | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
+                })
+                .unwrap();
         }
 
         // Update metrics with our scheduled amount.
@@ -375,7 +380,7 @@ impl GreedyRevenueScheduler {
             }
 
             // If the worker already has a pending job, don't give it any more.
-            if bridge.worker(worker).len() > 0 {
+            if !bridge.worker(worker).is_empty() {
                 continue;
             }
 
@@ -604,12 +609,14 @@ impl GreedyRevenueScheduler {
             .push(KeyedTransactionMeta { key: tx.key, meta: *tx });
 
         // Schedule the batch.
-        bridge.schedule(ScheduleBatch {
-            worker,
-            transactions: &self.schedule_batch,
-            max_working_slot: bridge.progress().current_slot + 1,
-            flags: pack_message_flags::EXECUTE,
-        });
+        bridge
+            .schedule(ScheduleBatch {
+                worker,
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE,
+            })
+            .unwrap();
 
         // Update state.
         *budget -= tx.cost;
@@ -978,7 +985,7 @@ mod tests {
         assert_eq!(check_batch.transactions.len(), 1);
 
         // Queue a successful check response.
-        bridge.queue_check_response(&check_batch, 0, None);
+        bridge.queue_check_response_ok(&check_batch, 0, None);
 
         // Poll - check response drained, TX moves to checked.
         bridge.queue_progress(MOCK_PROGRESS);
@@ -1040,9 +1047,9 @@ mod tests {
                 | status_check_flags::ALREADY_PROCESSED,
             ..bridge.check_ok()
         };
-        bridge.queue_check_response_with(&check_batch, 0, None, parse_fail);
-        bridge.queue_check_response_with(&check_batch, 1, None, resolve_fail);
-        bridge.queue_check_response_with(&check_batch, 2, None, status_fail);
+        bridge.queue_check_response(&check_batch, 0, None, parse_fail);
+        bridge.queue_check_response(&check_batch, 1, None, resolve_fail);
+        bridge.queue_check_response(&check_batch, 2, None, status_fail);
 
         // Poll.
         bridge.queue_progress(MOCK_PROGRESS);
@@ -1110,7 +1117,7 @@ mod tests {
             .iter()
             .position(|t| t.key == checked_meta.key)
             .unwrap();
-        bridge.queue_check_response(&recheck_batch, idx, None);
+        bridge.queue_check_response_ok(&recheck_batch, idx, None);
 
         // Poll - recheck OK is a no-op; TX stays in checked.
         bridge.queue_progress(leader_no_budget);
@@ -1170,7 +1177,7 @@ mod tests {
                 | status_check_flags::ALREADY_PROCESSED,
             ..bridge.check_ok()
         };
-        bridge.queue_check_response_with(&recheck_batch, idx, None, status_fail);
+        bridge.queue_check_response(&recheck_batch, idx, None, status_fail);
         scheduler.poll(&mut bridge);
 
         // Assert - Checked TX dropped.
@@ -1603,7 +1610,7 @@ mod tests {
                 .iter()
                 .any(|t| t.key == checked_meta.key),
         );
-        bridge.queue_check_response(&recheck_batch, 0, None);
+        bridge.queue_check_response_ok(&recheck_batch, 0, None);
 
         // Third leader poll - recheck response drained, cursor exhausted (only 1 TX).
         bridge.queue_progress(leader_no_budget);
@@ -1614,7 +1621,7 @@ mod tests {
         while let Some(batch) = bridge.pop_schedule() {
             if batch.flags & 1 == pack_message_flags::CHECK {
                 for i in 0..batch.transactions.len() {
-                    bridge.queue_check_response(&batch, i, None);
+                    bridge.queue_check_response_ok(&batch, i, None);
                 }
             }
         }
@@ -1624,7 +1631,7 @@ mod tests {
         while let Some(batch) = bridge.pop_schedule() {
             if batch.flags & 1 == pack_message_flags::CHECK {
                 for i in 0..batch.transactions.len() {
-                    bridge.queue_check_response(&batch, i, None);
+                    bridge.queue_check_response_ok(&batch, i, None);
                 }
             }
         }

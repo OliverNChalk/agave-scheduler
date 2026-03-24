@@ -20,7 +20,7 @@ use agave_schedulers::events::{
 use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
-    TransactionState, TxDecision, Worker, WorkerAction, WorkerResponse,
+    TransactionState, TxDecision, WorkerAction, WorkerResponse,
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
@@ -333,24 +333,32 @@ impl BatchScheduler {
         assert!(self.executing_tx.insert(change_tip_receiver));
 
         // TODO: Schedule as a single batch once we have SIMD83 live.
-        bridge.schedule(ScheduleBatch {
-            worker: EXECUTE_WORKER_START,
-            transactions: &[KeyedTransactionMeta {
-                key: init_tip_distribution,
-                meta: PriorityId { priority: BUNDLE_MARKER, cost: 0, key: init_tip_distribution },
-            }],
-            max_working_slot: self.slot + 4,
-            flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
-        });
-        bridge.schedule(ScheduleBatch {
-            worker: EXECUTE_WORKER_START,
-            transactions: &[KeyedTransactionMeta {
-                key: change_tip_receiver,
-                meta: PriorityId { priority: BUNDLE_MARKER, cost: 0, key: change_tip_receiver },
-            }],
-            max_working_slot: self.slot + 4,
-            flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
-        });
+        bridge
+            .schedule(ScheduleBatch {
+                worker: EXECUTE_WORKER_START,
+                transactions: &[KeyedTransactionMeta {
+                    key: init_tip_distribution,
+                    meta: PriorityId {
+                        priority: BUNDLE_MARKER,
+                        cost: 0,
+                        key: init_tip_distribution,
+                    },
+                }],
+                max_working_slot: self.slot + 4,
+                flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
+            })
+            .unwrap();
+        bridge
+            .schedule(ScheduleBatch {
+                worker: EXECUTE_WORKER_START,
+                transactions: &[KeyedTransactionMeta {
+                    key: change_tip_receiver,
+                    meta: PriorityId { priority: BUNDLE_MARKER, cost: 0, key: change_tip_receiver },
+                }],
+                max_working_slot: self.slot + 4,
+                flags: pack_message_flags::EXECUTE | execution_flags::DROP_ON_FAILURE,
+            })
+            .unwrap();
     }
 
     fn drain_worker_responses(&mut self, bridge: &mut SchedulerBindingsBridge<PriorityId>) {
@@ -414,7 +422,10 @@ impl BatchScheduler {
         // TODO: Need to dedupe already seen transactions?
 
         bridge.drain_tpu(
-            |bridge, key| match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
+            |bridge, key| match Self::calculate_priority(
+                bridge.runtime(),
+                &bridge.transaction(key).data,
+            ) {
                 Some((priority, cost)) => {
                     // Ban using the tip payment program as it could be used to steal tips.
                     if Self::should_filter(bridge.transaction(key)) {
@@ -547,7 +558,10 @@ impl BatchScheduler {
         }
 
         // Filter bundles containing transactions that write to tip accounts.
-        if keys.iter().any(|key| Self::should_filter(bridge.transaction(*key))) {
+        if keys
+            .iter()
+            .any(|key| Self::should_filter(bridge.transaction(*key)))
+        {
             self.metrics.recv_bundle_filtered.increment(1);
             for key in keys {
                 bridge.drop_transaction(key);
@@ -659,15 +673,17 @@ impl BatchScheduler {
                 break;
             }
 
-            bridge.schedule(ScheduleBatch {
-                worker: CHECK_WORKER,
-                transactions: &self.schedule_batch,
-                max_working_slot: u64::MAX,
-                flags: pack_message_flags::CHECK
-                    | check_flags::STATUS_CHECKS
-                    | check_flags::LOAD_FEE_PAYER_BALANCE
-                    | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
-            });
+            bridge
+                .schedule(ScheduleBatch {
+                    worker: CHECK_WORKER,
+                    transactions: &self.schedule_batch,
+                    max_working_slot: u64::MAX,
+                    flags: pack_message_flags::CHECK
+                        | check_flags::STATUS_CHECKS
+                        | check_flags::LOAD_FEE_PAYER_BALANCE
+                        | check_flags::LOAD_ADDRESS_LOOKUP_TABLES,
+                })
+                .unwrap();
         }
 
         // Update metrics with our scheduled amount.
@@ -694,7 +710,7 @@ impl BatchScheduler {
             }
 
             // If the worker already has a pending job, don't give it any more.
-            if bridge.worker(worker).len() > 0 {
+            if !bridge.worker(worker).is_empty() {
                 continue;
             }
 
@@ -932,12 +948,14 @@ impl BatchScheduler {
             .push(KeyedTransactionMeta { key: tx.key, meta: *tx });
 
         // Schedule the batch.
-        bridge.schedule(ScheduleBatch {
-            worker,
-            transactions: &self.schedule_batch,
-            max_working_slot: bridge.progress().current_slot + 1,
-            flags: pack_message_flags::EXECUTE,
-        });
+        bridge
+            .schedule(ScheduleBatch {
+                worker,
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE,
+            })
+            .unwrap();
 
         // Update state.
         *budget -= tx.cost;
@@ -999,14 +1017,16 @@ impl BatchScheduler {
             );
 
         // Schedule 1 bundle as 1 batch.
-        bridge.schedule(ScheduleBatch {
-            worker,
-            transactions: &self.schedule_batch,
-            max_working_slot: bridge.progress().current_slot + 1,
-            flags: pack_message_flags::EXECUTE
-                | execution_flags::DROP_ON_FAILURE
-                | execution_flags::ALL_OR_NOTHING,
-        });
+        bridge
+            .schedule(ScheduleBatch {
+                worker,
+                transactions: &self.schedule_batch,
+                max_working_slot: bridge.progress().current_slot + 1,
+                flags: pack_message_flags::EXECUTE
+                    | execution_flags::DROP_ON_FAILURE
+                    | execution_flags::ALL_OR_NOTHING,
+            })
+            .unwrap();
 
         // Update state.
         *budget -= bundle.cost;
@@ -1697,7 +1717,7 @@ mod tests {
         assert_eq!(check_batch.transactions.len(), 1);
 
         // Queue a successful check response.
-        bridge.queue_check_response(&check_batch, 0, None);
+        bridge.queue_check_response_ok(&check_batch, 0, None);
 
         // Poll - check response drained, TX moves to checked.
         bridge.queue_progress(MOCK_PROGRESS);
@@ -1775,9 +1795,9 @@ mod tests {
                 | status_check_flags::ALREADY_PROCESSED,
             ..bridge.check_ok()
         };
-        bridge.queue_check_response_with(&check_batch, 0, None, parse_fail);
-        bridge.queue_check_response_with(&check_batch, 1, None, resolve_fail);
-        bridge.queue_check_response_with(&check_batch, 2, None, status_fail);
+        bridge.queue_check_response(&check_batch, 0, None, parse_fail);
+        bridge.queue_check_response(&check_batch, 1, None, resolve_fail);
+        bridge.queue_check_response(&check_batch, 2, None, status_fail);
 
         // Poll.
         bridge.queue_progress(MOCK_PROGRESS);
@@ -1855,7 +1875,7 @@ mod tests {
             .iter()
             .position(|t| t.key == checked_meta.key)
             .unwrap();
-        bridge.queue_check_response(&recheck_batch, idx, None);
+        bridge.queue_check_response_ok(&recheck_batch, idx, None);
 
         // Poll - recheck OK is a no-op; TX stays in checked.
         bridge.queue_progress(leader_no_budget);
@@ -1925,7 +1945,7 @@ mod tests {
                 | status_check_flags::ALREADY_PROCESSED,
             ..bridge.check_ok()
         };
-        bridge.queue_check_response_with(&recheck_batch, idx, None, status_fail);
+        bridge.queue_check_response(&recheck_batch, idx, None, status_fail);
         scheduler.poll(&mut bridge);
 
         // Assert - Checked TX dropped.
@@ -2864,7 +2884,7 @@ mod tests {
                 .iter()
                 .any(|t| t.key == checked_meta.key),
         );
-        bridge.queue_check_response(&recheck_batch, 0, None);
+        bridge.queue_check_response_ok(&recheck_batch, 0, None);
 
         // Third leader poll - recheck response drained, cursor exhausted (only 1 TX).
         bridge.queue_progress(leader_no_budget);
@@ -2875,7 +2895,7 @@ mod tests {
         while let Some(batch) = bridge.pop_schedule() {
             if batch.flags & 1 == pack_message_flags::CHECK {
                 for i in 0..batch.transactions.len() {
-                    bridge.queue_check_response(&batch, i, None);
+                    bridge.queue_check_response_ok(&batch, i, None);
                 }
             }
         }
@@ -2885,7 +2905,7 @@ mod tests {
         while let Some(batch) = bridge.pop_schedule() {
             if batch.flags & 1 == pack_message_flags::CHECK {
                 for i in 0..batch.transactions.len() {
-                    bridge.queue_check_response(&batch, i, None);
+                    bridge.queue_check_response_ok(&batch, i, None);
                 }
             }
         }
