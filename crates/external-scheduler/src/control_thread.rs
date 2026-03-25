@@ -39,31 +39,38 @@ impl ControlThread {
     async fn setup(runtime: &Runtime, args: Args, config: Config) -> Self {
         let shutdown = Shutdown::new();
 
-        // Spawn metrics publisher.
+        // Spawn metrics & events publishers (if NATS is configured).
         let mut threads = Vec::default();
-        let nats_client = Box::leak(Box::new(
-            metrics_nats_exporter::async_nats::connect(config.nats_servers)
-                .await
-                .expect("NATS Client Connect"),
-        ));
-        threads.push(
-            metrics_nats_exporter::install(
-                shutdown.token.clone(),
-                metrics_nats_exporter::Config {
-                    interval_min: Duration::from_millis(50),
-                    interval_max: Duration::from_millis(1000),
-                    metric_prefix: Some(format!("metric.scheduler.{}", config.host_name)),
-                },
-                nats_client,
-            )
-            .unwrap(),
-        );
+        let events = match config.nats_servers.is_empty() {
+            true => None,
+            false => {
+                let nats_client = Box::leak(Box::new(
+                    metrics_nats_exporter::async_nats::connect(config.nats_servers)
+                        .await
+                        .expect("NATS Client Connect"),
+                ));
+                threads.push(
+                    metrics_nats_exporter::install(
+                        shutdown.token.clone(),
+                        metrics_nats_exporter::Config {
+                            interval_min: Duration::from_millis(50),
+                            interval_max: Duration::from_millis(1000),
+                            metric_prefix: Some(format!("metric.scheduler.{}", config.host_name)),
+                        },
+                        nats_client,
+                    )
+                    .unwrap(),
+                );
 
-        // Spawn events publisher.
-        let event_ctx = EventContext::new();
-        let (event_tx, event_rx) = mpsc::channel(1024);
-        let events = EventEmitter::new(event_ctx, event_tx);
-        threads.push(EventsThread::spawn(event_rx, nats_client, &config.host_name));
+                // Spawn events publisher.
+                let event_ctx = EventContext::new();
+                let (event_tx, event_rx) = mpsc::channel(1024);
+                let events = EventEmitter::new(event_ctx, event_tx);
+                threads.push(EventsThread::spawn(event_rx, nats_client, &config.host_name));
+
+                Some(events)
+            }
+        };
 
         // Setup scheduler.
         match config.scheduler {
@@ -71,7 +78,7 @@ impl ControlThread {
                 let keypair = Arc::new(Keypair::read_from_file(batch.keypair_path).unwrap());
                 let (scheduler, jito_thread) = BatchScheduler::new(
                     shutdown.clone(),
-                    Some(events),
+                    events,
                     BatchSchedulerArgs {
                         tip: TipDistributionArgs {
                             vote_account: batch.tip.vote_account,
@@ -109,7 +116,7 @@ impl ControlThread {
                     shutdown.clone(),
                     args.bindings_ipc,
                     GreedyRevenueScheduler::new(
-                        Some(events),
+                        events,
                         GreedyRevenueArgs {
                             workers: 5,
                             unchecked_capacity: 64 * 1024,
@@ -124,7 +131,7 @@ impl ControlThread {
                     shutdown.clone(),
                     args.bindings_ipc,
                     GreedyThroughputScheduler::new(
-                        Some(events),
+                        events,
                         GreedyThroughputArgs {
                             workers: 5,
                             unchecked_capacity: 64 * 1024,

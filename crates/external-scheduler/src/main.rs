@@ -9,6 +9,8 @@ fn main() -> std::thread::Result<()> {
     use control_thread::ControlThread;
     use tracing::error;
 
+    use crate::config::{Config, SchedulerConfig};
+
     // Parse command-line arguments.
     let args = crate::args::Args::parse();
 
@@ -26,8 +28,15 @@ fn main() -> std::thread::Result<()> {
         default_panic(panic_info);
     }));
 
-    // Load config.
-    let config = serde_yaml::from_slice(&toolbox::fs::must_read(&args.config)).unwrap();
+    // Load config (or use default).
+    let config = args.config.as_ref().map_or_else(
+        || Config {
+            host_name: "dev".to_string(),
+            nats_servers: vec![],
+            scheduler: SchedulerConfig::GreedyThroughput,
+        },
+        |path| serde_yaml::from_slice(&toolbox::fs::must_read(path)).unwrap(),
+    );
 
     // Start server.
     ControlThread::run_in_place(args, config)
