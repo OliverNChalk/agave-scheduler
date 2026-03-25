@@ -229,6 +229,7 @@ dependencies = [
  "expect-test",
  "serde",
  "serde_json",
+ "serde_repr",
  "serde_with",
  "solana-clock",
  "solana-compute-budget-interface",

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_repr::Serialize_repr;
 use serde_with::serde_as;
 use solana_clock::Slot;
 use solana_signature::Signature;
@@ -57,11 +58,12 @@ pub enum TransactionSource {
     Jito,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize_repr)]
+#[repr(u32)]
 pub enum CheckFailure {
-    ParseOrSanitize,
-    AccountResolution,
-    StatusCheck,
+    ParseOrSanitize = 1,
+    AccountResolution = 2,
+    StatusCheck = 3,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -78,12 +80,12 @@ pub struct SlotStatsEvent {
     pub ingest_tpu_evict: u64,
     pub ingest_custom_ok: u64,
     pub ingest_custom_err: u64,
-    pub worker_unprocessed: u64,
     pub check_requested: u64,
     pub check_ok: u64,
     pub check_err: u64,
     pub check_evict: u64,
     pub execute_requested: u64,
+    pub execute_unprocessed: u64,
     pub execute_ok: u64,
     pub execute_err: u64,
 }
@@ -147,12 +149,12 @@ mod tests {
             ingest_tpu_evict: 2,
             ingest_custom_ok: 5,
             ingest_custom_err: 1,
-            worker_unprocessed: 0,
             check_requested: 16,
             check_ok: 12,
             check_err: 4,
             check_evict: 1,
             execute_requested: 7,
+            execute_unprocessed: 0,
             execute_ok: 5,
             execute_err: 2,
         });
@@ -172,12 +174,12 @@ mod tests {
                 ingest_tpu_evict: 2,
                 ingest_custom_ok: 5,
                 ingest_custom_err: 1,
-                worker_unprocessed: 0,
                 check_requested: 16,
                 check_ok: 12,
                 check_err: 4,
                 check_evict: 1,
                 execute_requested: 7,
+                execute_unprocessed: 0,
                 execute_ok: 5,
                 execute_err: 2,
             }),
@@ -195,12 +197,12 @@ mod tests {
               "ingest_tpu_evict": 2,
               "ingest_custom_ok": 5,
               "ingest_custom_err": 1,
-              "worker_unprocessed": 0,
               "check_requested": 16,
               "check_ok": 12,
               "check_err": 4,
               "check_evict": 1,
               "execute_requested": 7,
+              "execute_unprocessed": 0,
               "execute_ok": 5,
               "execute_err": 2
             }"#]]
@@ -330,7 +332,7 @@ mod tests {
               "tx_slot": 100,
               "priority": 5000,
               "action": "CheckErr",
-              "reason": "ParseOrSanitize"
+              "reason": 1
             }"#]]
         .assert_eq(&event);
     }

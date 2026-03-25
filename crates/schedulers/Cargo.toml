@@ -12,6 +12,7 @@ workspace = true
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api", "dev-context-only-utils"] }
 chrono = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive", "rc"] }
+serde_repr.workspace = true
 serde_with.workspace = true
 solana-clock.workspace = true
 solana-signature.workspace = true
