@@ -95,6 +95,7 @@ dependencies = [
 [[package]]
 name = "agave-feature-set"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "ahash",
  "solana-epoch-schedule",
@@ -152,6 +153,7 @@ dependencies = [
 [[package]]
 name = "agave-scheduler-bindings"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 
 [[package]]
 name = "agave-scheduler-fifo"
@@ -243,6 +245,7 @@ dependencies = [
 [[package]]
 name = "agave-scheduling-utils"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-feature-set 4.1.0-alpha.0",
  "agave-scheduler-bindings",
@@ -264,6 +267,7 @@ dependencies = [
 [[package]]
 name = "agave-transaction-view"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "solana-hash 4.2.0",
  "solana-message 4.0.0",
@@ -2414,9 +2418,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
+checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
 
 [[package]]
 name = "num-derive"
@@ -3129,11 +3133,12 @@ dependencies = [
 
 [[package]]
 name = "rts-alloc"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a0d46bfcacc6e65b67c547e5083ffd549fe80dee8ec337507dd7f01d26763f4"
+checksum = "53ced2d9fa1303e8c6814fe3fceb6599951e17622088df430ed6de039930cb9b"
 dependencies = [
  "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3561,11 +3566,12 @@ dependencies = [
 
 [[package]]
 name = "shaq"
-version = "1.0.2"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7ff8d8358f614b394c8011e4aca6eb9c0bba29bd73d16be593745bd47838cb8"
+checksum = "c34483a45b522d9b15cc1031536718acb3f2d94f7bc09d7156a3e8d173dfdffe"
 dependencies = [
  "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3875,6 +3881,7 @@ dependencies = [
 [[package]]
 name = "solana-builtins-default-costs"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-feature-set 4.1.0-alpha.0",
  "ahash",
@@ -3917,6 +3924,7 @@ dependencies = [
 [[package]]
 name = "solana-compute-budget"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "solana-fee-structure",
  "solana-program-runtime",
@@ -3925,6 +3933,7 @@ dependencies = [
 [[package]]
 name = "solana-compute-budget-instruction"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-feature-set 4.1.0-alpha.0",
  "solana-borsh",
@@ -3970,6 +3979,7 @@ dependencies = [
 [[package]]
 name = "solana-cost-model"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-feature-set 4.1.0-alpha.0",
  "ahash",
@@ -4101,6 +4111,7 @@ dependencies = [
 [[package]]
 name = "solana-fee"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-feature-set 4.1.0-alpha.0",
  "solana-fee-structure",
@@ -4286,6 +4297,7 @@ dependencies = [
 [[package]]
 name = "solana-metrics"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "crossbeam-channel",
  "gethostname",
@@ -4405,6 +4417,7 @@ dependencies = [
 [[package]]
 name = "solana-program-runtime"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -4617,6 +4630,7 @@ dependencies = [
 [[package]]
 name = "solana-runtime-transaction"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-transaction-view",
  "solana-compute-budget-instruction",
@@ -4852,6 +4866,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-callback"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "solana-account 4.1.0",
  "solana-clock",
@@ -4868,10 +4883,12 @@ checksum = "5addc8fc7beb262aed2df0c34322a04a1b07b82d35fac0a34cd01f5263f7e971"
 [[package]]
 name = "solana-svm-feature-set"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 
 [[package]]
 name = "solana-svm-log-collector"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "log",
 ]
@@ -4879,10 +4896,12 @@ dependencies = [
 [[package]]
 name = "solana-svm-measure"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 
 [[package]]
 name = "solana-svm-timings"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "eager",
  "enum-iterator",
@@ -4892,6 +4911,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-transaction"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "solana-hash 4.2.0",
  "solana-message 4.0.0",
@@ -4904,6 +4924,7 @@ dependencies = [
 [[package]]
 name = "solana-svm-type-overrides"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "rand 0.9.2",
 ]
@@ -5098,6 +5119,7 @@ dependencies = [
 [[package]]
 name = "solana-transaction-context"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "bincode",
  "serde",
@@ -5215,6 +5237,7 @@ dependencies = [
 [[package]]
 name = "solana-vote-program"
 version = "4.1.0-alpha.0"
+source = "git+https://github.com/OliverNChalk/agave#dd6908d6ef951468afa279ca42ff16311bbbef2c"
 dependencies = [
  "agave-feature-set 4.1.0-alpha.0",
  "bincode",
@@ -6438,9 +6461,9 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "wincode"
-version = "0.4.8"
+version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc91ddd8c932a38bbec58ed536d9e93ce9cd01b6af9b6de3c501132cf98ddec6"
+checksum = "657690780ce23e6f66576a782ffd88eb353512381817029cc1d7a99154bb6d1f"
 dependencies = [
  "pastey",
  "proc-macro2",
