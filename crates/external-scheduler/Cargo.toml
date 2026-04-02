@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+agave-orchestrator.workspace = true
 agave-scheduler-batch.workspace = true
 agave-scheduler-fifo.workspace = true
 agave-scheduler-greedy-revenue.workspace = true
@@ -24,6 +25,6 @@ serde_with.workspace = true
 serde_yaml.workspace = true
 solana-keypair.workspace = true
 solana-pubkey.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "signal"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "signal"] }
 toolbox = { workspace = true, features = ["named_task", "shutdown", "tracing", "version"] }
 tracing.workspace = true

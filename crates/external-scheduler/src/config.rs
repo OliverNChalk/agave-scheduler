@@ -11,6 +11,9 @@ pub(crate) struct Config {
     pub(crate) host_name: String,
     pub(crate) nats_servers: Vec<String>,
     pub(crate) filter_keys: HashSet<Pubkey>,
+    /// If provided, will write hourly log files to this directory.
+    #[serde(default)]
+    pub(crate) logs: Option<PathBuf>,
     pub(crate) scheduler: SchedulerConfig,
 }
 

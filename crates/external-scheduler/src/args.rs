@@ -8,12 +8,6 @@ pub(crate) struct Args {
     /// Path to scheduler config.
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub(crate) config: Option<PathBuf>,
-    /// Path to Agave IPC server.
-    #[clap(long, value_hint = ValueHint::FilePath)]
-    pub(crate) bindings_ipc: PathBuf,
-    /// If provided, will write hourly log files to this directory.
-    #[arg(long, value_hint = ValueHint::DirPath)]
-    pub(crate) logs: Option<PathBuf>,
     /// Emit metrics via NATS.
     #[arg(long)]
     pub(crate) metrics: bool,

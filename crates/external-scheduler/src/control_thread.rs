@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use agave_orchestrator::scheduler::ClientSession;
 use agave_scheduler_batch::{BatchScheduler, BatchSchedulerArgs, JitoArgs, TipDistributionArgs};
 use agave_scheduler_fifo::FifoScheduler;
 use agave_scheduler_greedy_revenue::{GreedyRevenueArgs, GreedyRevenueScheduler};
@@ -16,7 +17,6 @@ use toolbox::shutdown::Shutdown;
 use toolbox::tokio::NamedTask;
 use tracing::{error, info};
 
-use crate::args::Args;
 use crate::config::{Config, SchedulerConfig};
 use crate::events_thread::EventsThread;
 
@@ -26,17 +26,17 @@ pub(crate) struct ControlThread {
 }
 
 impl ControlThread {
-    pub(crate) fn run_in_place(args: Args, config: Config) -> std::thread::Result<()> {
+    pub(crate) fn run_in_place(config: Config, session: ClientSession) -> std::thread::Result<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let server = rt.block_on(ControlThread::setup(&rt, args, config));
+        let server = rt.block_on(ControlThread::setup(&rt, config, session));
 
         rt.block_on(server.run())
     }
 
-    async fn setup(runtime: &Runtime, args: Args, config: Config) -> Self {
+    async fn setup(runtime: &Runtime, config: Config, session: ClientSession) -> Self {
         let shutdown = Shutdown::new();
 
         // Spawn metrics & events publishers (if NATS is configured).
@@ -72,6 +72,9 @@ impl ControlThread {
             }
         };
 
+        // Derive worker count from the session topology.
+        let workers = session.workers.len();
+
         // Setup scheduler.
         match config.scheduler {
             SchedulerConfig::Batch(batch) => {
@@ -98,50 +101,42 @@ impl ControlThread {
                     },
                 );
 
-                threads.push(crate::scheduler_thread::spawn(
-                    shutdown.clone(),
-                    args.bindings_ipc,
-                    scheduler,
-                    5,
-                ));
+                threads.push(crate::scheduler_thread::spawn(shutdown.clone(), session, scheduler));
                 threads.push(jito_thread);
             }
             SchedulerConfig::Fifo => threads.push(crate::scheduler_thread::spawn::<FifoScheduler>(
                 shutdown.clone(),
-                args.bindings_ipc,
+                session,
                 FifoScheduler::new(),
-                4,
             )),
             SchedulerConfig::GreedyRevenue => {
                 threads.push(crate::scheduler_thread::spawn::<GreedyRevenueScheduler>(
                     shutdown.clone(),
-                    args.bindings_ipc,
+                    session,
                     GreedyRevenueScheduler::new(
                         events,
                         GreedyRevenueArgs {
-                            workers: 5,
+                            workers,
                             unchecked_capacity: 64 * 1024,
                             checked_capacity: 64 * 1024,
                             filter_keys: config.filter_keys,
                         },
                     ),
-                    5,
                 ));
             }
             SchedulerConfig::GreedyThroughput => {
                 threads.push(crate::scheduler_thread::spawn::<GreedyThroughputScheduler>(
                     shutdown.clone(),
-                    args.bindings_ipc,
+                    session,
                     GreedyThroughputScheduler::new(
                         events,
                         GreedyThroughputArgs {
-                            workers: 5,
+                            workers,
                             unchecked_capacity: 64 * 1024,
                             checked_capacity: 64 * 1024,
                             filter_keys: config.filter_keys,
                         },
                     ),
-                    5,
                 ));
             }
         }

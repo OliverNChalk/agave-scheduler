@@ -33,7 +33,6 @@ use solana_clock::Slot;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
 use solana_cost_model::cost_model::CostModel;
-use solana_fee_structure::FeeBudgetLimits;
 use solana_pubkey::Pubkey;
 use solana_runtime_transaction::runtime_transaction::RuntimeTransaction;
 use solana_svm_transaction::svm_message::SVMStaticMessage;
@@ -740,15 +739,13 @@ impl GreedyThroughputScheduler {
             .ok()?
             .sanitize_and_convert_to_compute_budget_limits(&runtime.feature_set)
             .ok()?;
-        let fee_budget_limits = FeeBudgetLimits::from(compute_budget_limits);
         let cost = CostModel::calculate_cost(&tx, &runtime.feature_set).sum();
 
         // Compute transaction reward.
         let fee_details = solana_fee::calculate_fee_details(
             &tx,
-            false,
             runtime.lamports_per_signature,
-            fee_budget_limits.prioritization_fee,
+            compute_budget_limits.get_prioritization_fee(),
             runtime.fee_features,
         );
         let burn = fee_details
