@@ -17,6 +17,7 @@ agave-schedulers.workspace = true
 agave-scheduling-utils = { workspace = true, features = ["agave-unstable-api"] }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true, features = ["alloc"] }
+hashbrown = { workspace = true, features = ["serde"] }
 metrics-nats-exporter.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

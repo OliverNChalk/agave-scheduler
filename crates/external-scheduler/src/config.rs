@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::path::PathBuf;
 
+use hashbrown::HashSet;
 use serde::Deserialize;
 use serde_with::serde_as;
 use solana_pubkey::Pubkey;
@@ -9,6 +10,7 @@ use solana_pubkey::Pubkey;
 pub(crate) struct Config {
     pub(crate) host_name: String,
     pub(crate) nats_servers: Vec<String>,
+    pub(crate) filter_keys: HashSet<Pubkey>,
     pub(crate) scheduler: SchedulerConfig,
 }
 

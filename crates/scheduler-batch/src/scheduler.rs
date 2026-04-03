@@ -20,7 +20,7 @@ use agave_schedulers::events::{
 use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
-    TransactionState, TxDecision, WorkerAction, WorkerResponse,
+    TxDecision, WorkerAction, WorkerResponse,
 };
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
@@ -71,6 +71,7 @@ pub struct BatchSchedulerArgs {
     pub tip: TipDistributionArgs,
     pub jito: JitoArgs,
     pub keypair: Arc<Keypair>,
+    pub filter_keys: HashSet<Pubkey>,
     pub unchecked_capacity: usize,
     pub checked_capacity: usize,
     pub bundle_capacity: usize,
@@ -81,6 +82,7 @@ pub struct BatchScheduler {
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
     tip_distribution_config: TipDistributionArgs,
     keypair: Arc<Keypair>,
+    filter_keys: HashSet<Pubkey>,
 
     unchecked_capacity: usize,
     checked_capacity: usize,
@@ -128,6 +130,7 @@ impl BatchScheduler {
             tip,
             jito: _,
             keypair,
+            mut filter_keys,
             unchecked_capacity,
             checked_capacity,
             bundle_capacity,
@@ -140,11 +143,15 @@ impl BatchScheduler {
             panic!();
         };
 
+        // Ensure tip program is filtered.
+        filter_keys.insert(TIP_PAYMENT_PROGRAM);
+
         Self {
             shutdown,
             jito_rx,
             tip_distribution_config: tip,
             keypair,
+            filter_keys,
 
             unchecked_capacity,
             checked_capacity,
@@ -429,13 +436,6 @@ impl BatchScheduler {
                 &bridge.transaction(key).data,
             ) {
                 Some((priority, cost)) => {
-                    // Ban using the tip payment program as it could be used to steal tips.
-                    if Self::should_filter(bridge.transaction(key)) {
-                        self.metrics.recv_tpu_filtered.increment(1);
-
-                        return TxDecision::Drop;
-                    }
-
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
                         bridge,
@@ -480,14 +480,6 @@ impl BatchScheduler {
 
         match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
             Some((priority, cost)) => {
-                // Ban using the tip payment program as it could be used to steal tips.
-                if Self::should_filter(bridge.transaction(key)) {
-                    self.metrics.recv_packet_filtered.increment(1);
-                    bridge.drop_transaction(key);
-
-                    return;
-                }
-
                 // Evict lowest if we're at capacity.
                 if self.unchecked_tx.len() == self.unchecked_capacity {
                     let id = self.unchecked_tx.pop_min().unwrap();
@@ -561,19 +553,6 @@ impl BatchScheduler {
             // Accumulate totals.
             total_cost += cost;
             total_reward += reward + tip;
-        }
-
-        // Filter bundles containing transactions that write to tip accounts.
-        if keys
-            .iter()
-            .any(|key| Self::should_filter(bridge.transaction(*key)))
-        {
-            self.metrics.recv_bundle_filtered.increment(1);
-            for key in keys {
-                bridge.drop_transaction(key);
-            }
-
-            return;
         }
 
         // Calculate bundle priority.
@@ -818,6 +797,18 @@ impl BatchScheduler {
             self.slot_stats.check_ok += 1;
 
             return TxDecision::Keep;
+        }
+
+        // Apply the filter list.
+        if bridge
+            .transaction(meta.key)
+            .locks()
+            .any(|(key, _)| self.filter_keys.contains(key))
+        {
+            self.metrics.check_filtered.increment(1);
+            self.slot_stats.check_filtered += 1;
+
+            return TxDecision::Drop;
         }
 
         // First check. Evict lowest priority if at capacity.
@@ -1176,12 +1167,6 @@ impl BatchScheduler {
         }));
     }
 
-    fn should_filter(tx: &TransactionState) -> bool {
-        tx.write_locks()
-            .chain(tx.read_locks())
-            .any(|lock| lock == &TIP_PAYMENT_PROGRAM)
-    }
-
     fn extract_tip(tx: &SanitizedTransactionView<TransactionPtr>) -> u64 {
         let account_keys = tx.static_account_keys();
 
@@ -1221,22 +1206,20 @@ struct BatchMetrics {
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
     recv_tpu_evict: Counter,
-    recv_tpu_filtered: Counter,
 
     recv_packet_ok: Counter,
     recv_packet_err: Counter,
     recv_packet_evict: Counter,
-    recv_packet_filtered: Counter,
 
     recv_bundle_ok: Counter,
     recv_bundle_err: Counter,
-    recv_bundle_filtered: Counter,
     recv_bundle_expired: Counter,
     recv_bundle_evict: Counter,
 
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
+    check_filtered: Counter,
     check_evict: Counter,
 
     execute_requested: Counter,
@@ -1262,16 +1245,13 @@ impl BatchMetrics {
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
             recv_tpu_err: counter!("recv_tpu", "label" => "err"),
             recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
-            recv_tpu_filtered: counter!("recv_tpu", "label" => "filtered"),
 
             recv_packet_ok: counter!("recv_packet", "label" => "ok"),
             recv_packet_err: counter!("recv_packet", "label" => "err"),
             recv_packet_evict: counter!("recv_packet", "label" => "evict"),
-            recv_packet_filtered: counter!("recv_packet", "label" => "filtered"),
 
             recv_bundle_ok: counter!("recv_bundle", "label" => "ok"),
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
-            recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
             recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
             recv_bundle_evict: counter!("recv_bundle", "label" => "evict"),
 
@@ -1280,6 +1260,7 @@ impl BatchMetrics {
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
             check_err: counter!("check", "label" => "err"),
+            check_filtered: counter!("check", "label" => "filtered"),
             check_evict: counter!("check", "label" => "evict"),
 
             execute_requested: counter!("execute", "label" => "requested"),
@@ -1387,6 +1368,7 @@ mod tests {
                 block_engine: String::new(),
             },
             keypair: Arc::new(Keypair::new()),
+            filter_keys: HashSet::new(),
             unchecked_capacity: 64,
             checked_capacity: 64,
             bundle_capacity: 16,

@@ -1,3 +1,5 @@
+use hashbrown::HashSet;
+
 mod args;
 mod config;
 mod control_thread;
@@ -33,6 +35,7 @@ fn main() -> std::thread::Result<()> {
         || Config {
             host_name: "dev".to_string(),
             nats_servers: vec![],
+            filter_keys: HashSet::new(),
             scheduler: SchedulerConfig::GreedyThroughput,
         },
         |path| serde_yaml::from_slice(&toolbox::fs::must_read(path)).unwrap(),
