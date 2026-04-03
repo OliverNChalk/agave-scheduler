@@ -35,7 +35,7 @@ fn main() -> std::thread::Result<()> {
             nats_servers: vec![],
             scheduler: SchedulerConfig::GreedyThroughput,
         },
-        |path| serde_yaml::from_slice(&toolbox::fs::must_read(path)).unwrap(),
+        |path| toml::from_str(&String::from_utf8(toolbox::fs::must_read(path)).unwrap()).unwrap(),
     );
 
     // Start server.

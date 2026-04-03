@@ -21,7 +21,7 @@ metrics-nats-exporter.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
-serde_yaml.workspace = true
+toml.workspace = true
 solana-keypair.workspace = true
 solana-pubkey.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "signal"] }
