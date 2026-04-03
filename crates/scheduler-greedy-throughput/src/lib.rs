@@ -22,6 +22,7 @@ use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
     TxDecision, WorkerAction, WorkerResponse,
 };
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use hashbrown::hash_map::EntryRef;
@@ -29,7 +30,6 @@ use hashbrown::{HashMap, HashSet};
 use indexmap::IndexSet;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
-use serde::Deserialize;
 use solana_clock::Slot;
 use solana_compute_budget_instruction::compute_budget_instruction_details;
 use solana_cost_model::block_cost_limits::MAX_BLOCK_UNITS_SIMD_0256;
@@ -55,11 +55,12 @@ const MAX_CHECK_BATCHES: usize = 4;
 const BLOCK_FILL_CUTOFF: u8 = 20;
 const PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GreedyThroughputArgs {
     pub workers: usize,
     pub unchecked_capacity: usize,
     pub checked_capacity: usize,
+    pub filter_keys: HashSet<Pubkey>,
 }
 
 pub struct GreedyThroughputScheduler {
@@ -91,13 +92,17 @@ impl GreedyThroughputScheduler {
     pub fn new(events: Option<EventEmitter>, args: GreedyThroughputArgs) -> Self {
         assert!(args.workers >= 2, "need at least 2 workers");
 
+        let unchecked_tx = MinMaxHeap::with_capacity(args.unchecked_capacity);
+        let executing_tx = HashSet::with_capacity(args.checked_capacity);
+        let deferred_tx = IndexSet::with_capacity(args.checked_capacity);
+
         Self {
             args,
 
-            unchecked_tx: MinMaxHeap::with_capacity(args.unchecked_capacity),
+            unchecked_tx,
             checked_tx: BTreeSet::new(),
-            executing_tx: HashSet::with_capacity(args.checked_capacity),
-            deferred_tx: IndexSet::with_capacity(args.checked_capacity),
+            executing_tx,
+            deferred_tx,
             next_recheck: None,
             in_flight_cus: 0,
             in_flight_locks: HashMap::new(),
@@ -245,7 +250,9 @@ impl GreedyThroughputScheduler {
 
                             TxDecision::Keep
                         }
-                        WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
+                        WorkerAction::Check(rep, resolved_keys) => {
+                            self.on_check(bridge, meta, rep, resolved_keys)
+                        }
                         WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
                     }
                 },
@@ -282,6 +289,12 @@ impl GreedyThroughputScheduler {
                 &bridge.transaction(key).data,
             ) {
                 Some((priority, cost)) => {
+                    if self.should_filter_static(&bridge.transaction(key).data) {
+                        self.metrics.recv_tpu_filtered.increment(1);
+
+                        return TxDecision::Drop;
+                    }
+
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
                         bridge,
@@ -422,6 +435,7 @@ impl GreedyThroughputScheduler {
         bridge: &mut SchedulerBindingsBridge<PriorityId>,
         meta: PriorityId,
         rep: CheckResponse,
+        resolved_keys: Option<&PubkeysPtr>,
     ) -> TxDecision {
         // If transaction is currently executing (or deferred), ignore the recheck
         // result.
@@ -477,6 +491,19 @@ impl GreedyThroughputScheduler {
             self.slot_stats.check_ok += 1;
 
             return TxDecision::Keep;
+        }
+
+        // Apply the filter list against resolved ALT keys.
+        if let Some(keys) = resolved_keys
+            && keys
+                .as_slice()
+                .iter()
+                .any(|key| self.args.filter_keys.contains(key))
+        {
+            self.metrics.check_filtered.increment(1);
+            self.slot_stats.check_filtered += 1;
+
+            return TxDecision::Drop;
         }
 
         // First check. Evict lowest priority if at capacity.
@@ -748,6 +775,12 @@ impl GreedyThroughputScheduler {
         Some((priority, cost))
     }
 
+    fn should_filter_static(&self, tx: &SanitizedTransactionView<TransactionPtr>) -> bool {
+        tx.static_account_keys()
+            .iter()
+            .any(|key| self.args.filter_keys.contains(key))
+    }
+
     fn emit_tx_event(
         &self,
         bridge: &SchedulerBindingsBridge<PriorityId>,
@@ -787,10 +820,12 @@ struct GreedyThroughputMetrics {
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
     recv_tpu_evict: Counter,
+    recv_tpu_filtered: Counter,
 
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
+    check_filtered: Counter,
     check_evict: Counter,
 
     execute_requested: Counter,
@@ -815,12 +850,14 @@ impl GreedyThroughputMetrics {
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
             recv_tpu_err: counter!("recv_tpu", "label" => "err"),
             recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
+            recv_tpu_filtered: counter!("recv_tpu", "label" => "filtered"),
 
             in_flight_cus: gauge!("in_flight_cus"),
 
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
             check_err: counter!("check", "label" => "err"),
+            check_filtered: counter!("check", "label" => "filtered"),
             check_evict: counter!("check", "label" => "evict"),
 
             execute_requested: counter!("execute", "label" => "requested"),
@@ -901,7 +938,12 @@ mod tests {
     fn test_scheduler() -> GreedyThroughputScheduler {
         GreedyThroughputScheduler::new(
             None,
-            GreedyThroughputArgs { workers: 5, unchecked_capacity: 64, checked_capacity: 64 },
+            GreedyThroughputArgs {
+                workers: 5,
+                unchecked_capacity: 64,
+                checked_capacity: 64,
+                filter_keys: HashSet::new(),
+            },
         )
     }
 
