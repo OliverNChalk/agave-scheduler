@@ -22,6 +22,7 @@ use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
     TxDecision, WorkerAction, WorkerResponse,
 };
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
@@ -399,7 +400,9 @@ impl BatchScheduler {
 
                             TxDecision::Keep
                         }
-                        WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
+                        WorkerAction::Check(rep, resolved_keys) => {
+                            self.on_check(bridge, meta, rep, resolved_keys)
+                        }
                         WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
                     }
                 },
@@ -436,6 +439,12 @@ impl BatchScheduler {
                 &bridge.transaction(key).data,
             ) {
                 Some((priority, cost)) => {
+                    if self.should_filter_static(&bridge.transaction(key).data) {
+                        self.metrics.recv_tpu_filtered.increment(1);
+
+                        return TxDecision::Drop;
+                    }
+
                     self.unchecked_tx.push(PriorityId { priority, cost, key });
                     self.emit_tx_event(
                         bridge,
@@ -480,6 +489,13 @@ impl BatchScheduler {
 
         match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
             Some((priority, cost)) => {
+                if self.should_filter_static(&bridge.transaction(key).data) {
+                    self.metrics.recv_packet_filtered.increment(1);
+                    bridge.drop_transaction(key);
+
+                    return;
+                }
+
                 // Evict lowest if we're at capacity.
                 if self.unchecked_tx.len() == self.unchecked_capacity {
                     let id = self.unchecked_tx.pop_min().unwrap();
@@ -553,6 +569,19 @@ impl BatchScheduler {
             // Accumulate totals.
             total_cost += cost;
             total_reward += reward + tip;
+        }
+
+        // Filter bundles containing transactions that reference filtered accounts.
+        if keys
+            .iter()
+            .any(|key| self.should_filter_static(&bridge.transaction(*key).data))
+        {
+            self.metrics.recv_bundle_filtered.increment(1);
+            for key in keys {
+                bridge.drop_transaction(key);
+            }
+
+            return;
         }
 
         // Calculate bundle priority.
@@ -742,6 +771,7 @@ impl BatchScheduler {
         bridge: &mut SchedulerBindingsBridge<PriorityId>,
         meta: PriorityId,
         rep: CheckResponse,
+        resolved_keys: Option<&PubkeysPtr>,
     ) -> TxDecision {
         // If transaction is currently executing (or deferred), ignore the recheck
         // result.
@@ -799,11 +829,12 @@ impl BatchScheduler {
             return TxDecision::Keep;
         }
 
-        // Apply the filter list.
-        if bridge
-            .transaction(meta.key)
-            .locks()
-            .any(|(key, _)| self.filter_keys.contains(key))
+        // Apply the filter list against resolved ALT keys.
+        if let Some(keys) = resolved_keys
+            && keys
+                .as_slice()
+                .iter()
+                .any(|key| self.filter_keys.contains(key))
         {
             self.metrics.check_filtered.increment(1);
             self.slot_stats.check_filtered += 1;
@@ -1167,6 +1198,12 @@ impl BatchScheduler {
         }));
     }
 
+    fn should_filter_static(&self, tx: &SanitizedTransactionView<TransactionPtr>) -> bool {
+        tx.static_account_keys()
+            .iter()
+            .any(|key| self.filter_keys.contains(key))
+    }
+
     fn extract_tip(tx: &SanitizedTransactionView<TransactionPtr>) -> u64 {
         let account_keys = tx.static_account_keys();
 
@@ -1206,13 +1243,16 @@ struct BatchMetrics {
     recv_tpu_ok: Counter,
     recv_tpu_err: Counter,
     recv_tpu_evict: Counter,
+    recv_tpu_filtered: Counter,
 
     recv_packet_ok: Counter,
     recv_packet_err: Counter,
     recv_packet_evict: Counter,
+    recv_packet_filtered: Counter,
 
     recv_bundle_ok: Counter,
     recv_bundle_err: Counter,
+    recv_bundle_filtered: Counter,
     recv_bundle_expired: Counter,
     recv_bundle_evict: Counter,
 
@@ -1245,13 +1285,16 @@ impl BatchMetrics {
             recv_tpu_ok: counter!("recv_tpu", "label" => "ok"),
             recv_tpu_err: counter!("recv_tpu", "label" => "err"),
             recv_tpu_evict: counter!("recv_tpu", "label" => "evict"),
+            recv_tpu_filtered: counter!("recv_tpu", "label" => "filtered"),
 
             recv_packet_ok: counter!("recv_packet", "label" => "ok"),
             recv_packet_err: counter!("recv_packet", "label" => "err"),
             recv_packet_evict: counter!("recv_packet", "label" => "evict"),
+            recv_packet_filtered: counter!("recv_packet", "label" => "filtered"),
 
             recv_bundle_ok: counter!("recv_bundle", "label" => "ok"),
             recv_bundle_err: counter!("recv_bundle", "label" => "err"),
+            recv_bundle_filtered: counter!("recv_bundle", "label" => "filtered"),
             recv_bundle_expired: counter!("recv_bundle", "label" => "expired"),
             recv_bundle_evict: counter!("recv_bundle", "label" => "evict"),
 
