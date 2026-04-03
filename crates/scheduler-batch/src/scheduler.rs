@@ -576,6 +576,9 @@ impl BatchScheduler {
             .iter()
             .any(|key| self.should_filter_static(&bridge.transaction(*key).data))
         {
+            // TODO: Jito bundles don't go through checks so ALTs may contain filtered
+            // accounts, need to check if ALTs can contain Jito tip program (would enable
+            // tip stealing).
             self.metrics.recv_bundle_filtered.increment(1);
             for key in keys {
                 bridge.drop_transaction(key);
