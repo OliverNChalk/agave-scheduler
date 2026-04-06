@@ -291,6 +291,7 @@ impl GreedyThroughputScheduler {
                 Some((priority, cost)) => {
                     if self.should_filter_static(&bridge.transaction(key).data) {
                         self.metrics.recv_tpu_filtered.increment(1);
+                        self.slot_stats.ingest_tpu_filtered += 1;
 
                         return TxDecision::Drop;
                     }

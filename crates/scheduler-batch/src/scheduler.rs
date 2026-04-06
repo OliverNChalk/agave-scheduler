@@ -441,6 +441,7 @@ impl BatchScheduler {
                 Some((priority, cost)) => {
                     if self.should_filter_static(&bridge.transaction(key).data) {
                         self.metrics.recv_tpu_filtered.increment(1);
+                        self.slot_stats.ingest_tpu_filtered += 1;
 
                         return TxDecision::Drop;
                     }
@@ -491,6 +492,7 @@ impl BatchScheduler {
             Some((priority, cost)) => {
                 if self.should_filter_static(&bridge.transaction(key).data) {
                     self.metrics.recv_packet_filtered.increment(1);
+                    self.slot_stats.ingest_custom_filtered += 1;
                     bridge.drop_transaction(key);
 
                     return;
