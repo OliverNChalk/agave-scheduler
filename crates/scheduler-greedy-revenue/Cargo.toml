@@ -16,7 +16,6 @@ agave-transaction-view.workspace = true
 indexmap.workspace = true
 metrics.workspace = true
 min-max-heap.workspace = true
-serde = { workspace = true, features = ["derive", "rc"] }
 solana-clock.workspace = true
 solana-compute-budget-instruction = { workspace = true, features = ["agave-unstable-api"] }
 solana-cost-model = { workspace = true, features = ["agave-unstable-api"] }
