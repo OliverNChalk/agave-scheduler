@@ -173,7 +173,6 @@ dependencies = [
  "indexmap 2.13.0",
  "metrics",
  "min-max-heap",
- "serde",
  "solana-clock",
  "solana-compute-budget-instruction",
  "solana-compute-budget-interface",
@@ -200,7 +199,6 @@ dependencies = [
  "indexmap 2.13.0",
  "metrics",
  "min-max-heap",
- "serde",
  "solana-clock",
  "solana-compute-budget-instruction",
  "solana-compute-budget-interface",
@@ -239,7 +237,6 @@ dependencies = [
  "strum",
  "tokio",
  "toolbox",
- "tracing",
 ]
 
 [[package]]
