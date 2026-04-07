@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Bound;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -20,13 +21,12 @@ use agave_schedulers::events::{
 use agave_schedulers::shared::PriorityId;
 use agave_scheduling_utils::bridge::{
     KeyedTransactionMeta, RuntimeState, ScheduleBatch, SchedulerBindingsBridge, TransactionKey,
-    TransactionState, TxDecision, WorkerAction, WorkerResponse,
+    TxDecision, WorkerAction, WorkerResponse,
 };
+use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
-use hashbrown::hash_map::EntryRef;
-use hashbrown::{HashMap, HashSet};
 use indexmap::IndexSet;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -71,6 +71,7 @@ pub struct BatchSchedulerArgs {
     pub tip: TipDistributionArgs,
     pub jito: JitoArgs,
     pub keypair: Arc<Keypair>,
+    pub filter_keys: HashSet<Pubkey>,
     pub unchecked_capacity: usize,
     pub checked_capacity: usize,
     pub bundle_capacity: usize,
@@ -81,6 +82,7 @@ pub struct BatchScheduler {
     jito_rx: crossbeam_channel::Receiver<JitoUpdate>,
     tip_distribution_config: TipDistributionArgs,
     keypair: Arc<Keypair>,
+    filter_keys: HashSet<Pubkey>,
 
     unchecked_capacity: usize,
     checked_capacity: usize,
@@ -128,6 +130,7 @@ impl BatchScheduler {
             tip,
             jito: _,
             keypair,
+            mut filter_keys,
             unchecked_capacity,
             checked_capacity,
             bundle_capacity,
@@ -140,11 +143,15 @@ impl BatchScheduler {
             panic!();
         };
 
+        // Ensure tip program is filtered.
+        filter_keys.insert(TIP_PAYMENT_PROGRAM);
+
         Self {
             shutdown,
             jito_rx,
             tip_distribution_config: tip,
             keypair,
+            filter_keys,
 
             unchecked_capacity,
             checked_capacity,
@@ -392,7 +399,9 @@ impl BatchScheduler {
 
                             TxDecision::Keep
                         }
-                        WorkerAction::Check(rep, _) => self.on_check(bridge, meta, rep),
+                        WorkerAction::Check(rep, resolved_keys) => {
+                            self.on_check(bridge, meta, rep, resolved_keys)
+                        }
                         WorkerAction::Execute(rep) => self.on_execute(bridge, meta, rep),
                     }
                 },
@@ -429,9 +438,9 @@ impl BatchScheduler {
                 &bridge.transaction(key).data,
             ) {
                 Some((priority, cost)) => {
-                    // Ban using the tip payment program as it could be used to steal tips.
-                    if Self::should_filter(bridge.transaction(key)) {
+                    if self.should_filter_static(&bridge.transaction(key).data) {
                         self.metrics.recv_tpu_filtered.increment(1);
+                        self.slot_stats.ingest_tpu_filtered += 1;
 
                         return TxDecision::Drop;
                     }
@@ -480,9 +489,9 @@ impl BatchScheduler {
 
         match Self::calculate_priority(bridge.runtime(), &bridge.transaction(key).data) {
             Some((priority, cost)) => {
-                // Ban using the tip payment program as it could be used to steal tips.
-                if Self::should_filter(bridge.transaction(key)) {
+                if self.should_filter_static(&bridge.transaction(key).data) {
                     self.metrics.recv_packet_filtered.increment(1);
+                    self.slot_stats.ingest_custom_filtered += 1;
                     bridge.drop_transaction(key);
 
                     return;
@@ -563,11 +572,13 @@ impl BatchScheduler {
             total_reward += reward + tip;
         }
 
-        // Filter bundles containing transactions that write to tip accounts.
+        // Filter bundles containing transactions that reference filtered accounts.
         if keys
             .iter()
-            .any(|key| Self::should_filter(bridge.transaction(*key)))
+            .any(|key| self.should_filter_static(&bridge.transaction(*key).data))
         {
+            // NB: We don't check ALTs on Jito bundles as these are assumed to be filtered
+            // upstream.
             self.metrics.recv_bundle_filtered.increment(1);
             for key in keys {
                 bridge.drop_transaction(key);
@@ -763,6 +774,7 @@ impl BatchScheduler {
         bridge: &mut SchedulerBindingsBridge<PriorityId>,
         meta: PriorityId,
         rep: CheckResponse,
+        resolved_keys: Option<&PubkeysPtr>,
     ) -> TxDecision {
         // If transaction is currently executing (or deferred), ignore the recheck
         // result.
@@ -818,6 +830,19 @@ impl BatchScheduler {
             self.slot_stats.check_ok += 1;
 
             return TxDecision::Keep;
+        }
+
+        // Apply the filter list against resolved ALT keys.
+        if let Some(keys) = resolved_keys
+            && keys
+                .as_slice()
+                .iter()
+                .any(|key| self.filter_keys.contains(key))
+        {
+            self.metrics.check_filtered.increment(1);
+            self.slot_stats.check_filtered += 1;
+
+            return TxDecision::Drop;
         }
 
         // First check. Evict lowest priority if at capacity.
@@ -1073,7 +1098,7 @@ impl BatchScheduler {
     ) {
         for (addr, writable) in bridge.transaction(tx_key).locks() {
             in_flight_locks
-                .entry_ref(addr)
+                .entry(*addr)
                 .or_default()
                 .insert(tx_key, writable);
         }
@@ -1088,7 +1113,7 @@ impl BatchScheduler {
         tx_key: TransactionKey,
     ) {
         for (addr, writable) in bridge.transaction(tx_key).locks() {
-            let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
+            let Entry::Occupied(mut entry) = in_flight_locks.entry(*addr) else {
                 panic!();
             };
             entry.get_mut().remove(tx_key, writable);
@@ -1176,10 +1201,10 @@ impl BatchScheduler {
         }));
     }
 
-    fn should_filter(tx: &TransactionState) -> bool {
-        tx.write_locks()
-            .chain(tx.read_locks())
-            .any(|lock| lock == &TIP_PAYMENT_PROGRAM)
+    fn should_filter_static(&self, tx: &SanitizedTransactionView<TransactionPtr>) -> bool {
+        tx.static_account_keys()
+            .iter()
+            .any(|key| self.filter_keys.contains(key))
     }
 
     fn extract_tip(tx: &SanitizedTransactionView<TransactionPtr>) -> u64 {
@@ -1237,6 +1262,7 @@ struct BatchMetrics {
     check_requested: Counter,
     check_ok: Counter,
     check_err: Counter,
+    check_filtered: Counter,
     check_evict: Counter,
 
     execute_requested: Counter,
@@ -1280,6 +1306,7 @@ impl BatchMetrics {
             check_requested: counter!("check", "label" => "requested"),
             check_ok: counter!("check", "label" => "ok"),
             check_err: counter!("check", "label" => "err"),
+            check_filtered: counter!("check", "label" => "filtered"),
             check_evict: counter!("check", "label" => "evict"),
 
             execute_requested: counter!("execute", "label" => "requested"),
@@ -1387,6 +1414,7 @@ mod tests {
                 block_engine: String::new(),
             },
             keypair: Arc::new(Keypair::new()),
+            filter_keys: HashSet::new(),
             unchecked_capacity: 64,
             checked_capacity: 64,
             bundle_capacity: 16,

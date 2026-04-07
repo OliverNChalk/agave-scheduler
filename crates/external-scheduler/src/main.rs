@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 mod args;
 mod config;
 mod control_thread;
@@ -33,6 +35,7 @@ fn main() -> std::thread::Result<()> {
         || Config {
             host_name: "dev".to_string(),
             nats_servers: vec![],
+            filter_keys: HashSet::new(),
             scheduler: SchedulerConfig::GreedyThroughput,
         },
         |path| toml::from_str(&String::from_utf8(toolbox::fs::must_read(path)).unwrap()).unwrap(),

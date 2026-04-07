@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 
@@ -9,6 +10,7 @@ use solana_pubkey::Pubkey;
 pub(crate) struct Config {
     pub(crate) host_name: String,
     pub(crate) nats_servers: Vec<String>,
+    pub(crate) filter_keys: HashSet<Pubkey>,
     pub(crate) scheduler: SchedulerConfig,
 }
 
