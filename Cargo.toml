@@ -70,7 +70,6 @@ crossbeam-channel = "0.5.15"
 expect-test = "1.5.1"
 eyre = "0.6.12"
 futures = { version = "0.3.31", default-features = false }
-hashbrown = "0.16.0"
 indexmap = "2.13.0"
 jito-protos.path = "./crates/jito-protos"
 metrics = "0.24.2"

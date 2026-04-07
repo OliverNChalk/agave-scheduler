@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Bound;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -26,8 +27,6 @@ use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
 use crossbeam_channel::TryRecvError;
-use hashbrown::hash_map::EntryRef;
-use hashbrown::{HashMap, HashSet};
 use indexmap::IndexSet;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -578,9 +577,8 @@ impl BatchScheduler {
             .iter()
             .any(|key| self.should_filter_static(&bridge.transaction(*key).data))
         {
-            // TODO: Jito bundles don't go through checks so ALTs may contain filtered
-            // accounts, need to check if ALTs can contain Jito tip program (would enable
-            // tip stealing).
+            // NB: We don't check ALTs on Jito bundles as these are assumed to be filtered
+            // upstream.
             self.metrics.recv_bundle_filtered.increment(1);
             for key in keys {
                 bridge.drop_transaction(key);
@@ -1100,7 +1098,7 @@ impl BatchScheduler {
     ) {
         for (addr, writable) in bridge.transaction(tx_key).locks() {
             in_flight_locks
-                .entry_ref(addr)
+                .entry(*addr)
                 .or_default()
                 .insert(tx_key, writable);
         }
@@ -1115,7 +1113,7 @@ impl BatchScheduler {
         tx_key: TransactionKey,
     ) {
         for (addr, writable) in bridge.transaction(tx_key).locks() {
-            let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
+            let Entry::Occupied(mut entry) = in_flight_locks.entry(*addr) else {
                 panic!();
             };
             entry.get_mut().remove(tx_key, writable);

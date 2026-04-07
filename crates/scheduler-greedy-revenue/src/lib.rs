@@ -1,7 +1,8 @@
 #[macro_use]
 extern crate static_assertions;
 
-use std::collections::BTreeSet;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 
@@ -25,8 +26,6 @@ use agave_scheduling_utils::bridge::{
 use agave_scheduling_utils::pubkeys_ptr::PubkeysPtr;
 use agave_scheduling_utils::transaction_ptr::TransactionPtr;
 use agave_transaction_view::transaction_view::SanitizedTransactionView;
-use hashbrown::hash_map::EntryRef;
-use hashbrown::{HashMap, HashSet};
 use indexmap::IndexSet;
 use metrics::{Counter, Gauge, counter, gauge};
 use min_max_heap::MinMaxHeap;
@@ -689,7 +688,7 @@ impl GreedyRevenueScheduler {
     ) {
         for (addr, writable) in bridge.transaction(tx_key).locks() {
             in_flight_locks
-                .entry_ref(addr)
+                .entry(*addr)
                 .or_default()
                 .insert(tx_key, writable);
         }
@@ -704,7 +703,7 @@ impl GreedyRevenueScheduler {
         tx_key: TransactionKey,
     ) {
         for (addr, writable) in bridge.transaction(tx_key).locks() {
-            let EntryRef::Occupied(mut entry) = in_flight_locks.entry_ref(addr) else {
+            let Entry::Occupied(mut entry) = in_flight_locks.entry(*addr) else {
                 panic!();
             };
             entry.get_mut().remove(tx_key, writable);
